@@ -1,0 +1,32 @@
+name: Export previous dae integration source
+
+on:
+  push:
+    branches:
+      - tmp/export-dae-ipc-implementation
+  pull_request:
+    branches:
+      - feat/dae-ebpf-datapath
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Archive source
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git -czf /tmp/sing-box-dae-ipc-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-dae-ipc-source
+          path: /tmp/sing-box-dae-ipc-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
