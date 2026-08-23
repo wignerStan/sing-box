@@ -26,10 +26,13 @@ func NewProcessItem(processNameList []string) *ProcessItem {
 }
 
 func (r *ProcessItem) Match(metadata *adapter.InboundContext) bool {
-	if metadata.ProcessInfo == nil || metadata.ProcessInfo.ProcessPath == "" {
+	if metadata.ProcessInfo == nil {
 		return false
 	}
-	return r.processMap[filepath.Base(metadata.ProcessInfo.ProcessPath)]
+	if metadata.ProcessInfo.ProcessPath != "" && r.processMap[filepath.Base(metadata.ProcessInfo.ProcessPath)] {
+		return true
+	}
+	return metadata.ProcessInfo.ProcessName != "" && r.processMap[metadata.ProcessInfo.ProcessName]
 }
 
 func (r *ProcessItem) String() string {

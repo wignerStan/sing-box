@@ -22,6 +22,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/anytls"
 	"github.com/sagernet/sing-box/protocol/block"
 	"github.com/sagernet/sing-box/protocol/bridge"
+	"github.com/sagernet/sing-box/protocol/dae"
 	"github.com/sagernet/sing-box/protocol/direct"
 	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing-box/protocol/http"
@@ -53,6 +54,7 @@ func InboundRegistry() *inbound.Registry {
 	registry := inbound.NewRegistry()
 
 	tun.RegisterInbound(registry)
+	dae.RegisterInbound(registry)
 	redirect.RegisterRedirect(registry)
 	redirect.RegisterTProxy(registry)
 	direct.RegisterInbound(registry)
