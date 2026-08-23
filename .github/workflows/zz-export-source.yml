@@ -1,0 +1,33 @@
+name: Export exact sing-box source
+
+on:
+  push:
+    branches:
+      - tmp/export-dae-direct-source
+  pull_request:
+    branches:
+      - testing
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Archive source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > SOURCE_COMMIT
+          tar --exclude=.git --exclude=sing-box-source.tar.gz -czf sing-box-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-source
+          path: sing-box-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
