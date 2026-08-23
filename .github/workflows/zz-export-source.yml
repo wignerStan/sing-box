@@ -24,10 +24,10 @@ jobs:
         run: |
           set -euo pipefail
           git rev-parse HEAD > SOURCE_COMMIT
-          tar --exclude=.git --exclude=sing-box-source.tar.gz -czf sing-box-source.tar.gz .
+          tar --exclude=.git -czf /tmp/sing-box-source.tar.gz .
       - uses: actions/upload-artifact@v4
         with:
           name: sing-box-source
-          path: sing-box-source.tar.gz
+          path: /tmp/sing-box-source.tar.gz
           if-no-files-found: error
           retention-days: 1
