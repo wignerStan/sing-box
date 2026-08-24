@@ -1,0 +1,67 @@
+name: Publish clean direct dae integration
+
+on:
+  pull_request:
+    branches:
+      - tmp/dae-direct-publisher-base
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-clean-direct-dae
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.head_ref == 'feat/dae-ebpf-direct-inbound' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/dae-ebpf-direct-inbound
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.0
+          cache: true
+      - name: Reconstruct, validate, and publish one clean commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/dae-direct-gz/part-* | tr -d '\r\n' | base64 -d > /tmp/dae-direct.patch.gz
+          gzip -dc /tmp/dae-direct.patch.gz > /tmp/dae-direct.patch
+          echo 'a74bf25a8b616b0b1ee8b6167ae79e9ad7648643a7413d0679b124cb8a02a2cd  /tmp/dae-direct.patch' | sha256sum -c -
+
+          git reset --hard 712046a26d12bf132568476c14c5b717584d1ac0
+          git apply --index /tmp/dae-direct.patch
+          sed -i 's/v0.0.0-20260824172602-66fd115168e9/v0.0.0-20260824181252-23924b96e4cf/g' go.mod
+
+          gofmt -w \
+            adapter/inbound.go \
+            adapter/platform.go \
+            constant/proxy.go \
+            include/dae.go \
+            include/dae_stub.go \
+            include/registry.go \
+            option/dae.go \
+            protocol/dae/inbound_linux.go \
+            protocol/dae/inbound_linux_test.go \
+            protocol/dae/register.go \
+            route/network.go \
+            route/network_dae_test.go \
+            route/rule/rule_item_process_name.go \
+            route/rule/rule_item_process_name_test.go
+
+          go mod tidy
+          git add -A
+          git diff --cached --check
+
+          go test -tags with_dae ./protocol/dae ./route/... ./include
+          go test ./...
+          go build -tags "with_dae $(cat release/DEFAULT_BUILD_TAGS)" -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
+
+          git config user.name Jacob
+          git config user.email 240170694+wignerStan@users.noreply.github.com
+          git commit -m 'feat(inbound): add direct dae eBPF runtime'
+          git push --force origin HEAD:feat/dae-ebpf-direct-inbound
