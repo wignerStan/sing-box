@@ -37,6 +37,11 @@ jobs:
           git apply --index /tmp/dae-direct.patch
           sed -i 's/v0.0.0-20260824172602-66fd115168e9/v0.0.0-20260824181252-23924b96e4cf/g' go.mod
 
+          # Go ignores replace directives from dependency modules. Mirror the
+          # two implementation replacements used by the pinned dae provider.
+          go mod edit -replace=github.com/daeuniverse/outbound=github.com/olicesx/outbound@v0.0.0-sticky-ip.0.20260518034804-52c26f8e759e
+          go mod edit -replace=github.com/olicesx/quic-go=github.com/olicesx/quic-go@v0.0.0-20260428161614-e0d255ff807c
+
           gofmt -w \
             adapter/inbound.go \
             adapter/platform.go \
