@@ -10,12 +10,12 @@ permissions:
 
 concurrency:
   group: publish-clean-direct-dae
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   publish:
     if: github.head_ref == 'feat/dae-ebpf-direct-inbound' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
