@@ -96,6 +96,7 @@ type FindConnectionOwnerRequest struct {
 
 type ConnectionOwner struct {
 	ProcessID           uint32
+	ProcessName         string
 	UserId              int32
 	UserName            string
 	ProcessPath         string

@@ -409,6 +409,9 @@ func (r *NetworkManager) DefaultOptions() adapter.NetworkOptions {
 }
 
 func (r *NetworkManager) RegisterAutoRedirectOutputMark(mark uint32) error {
+	if r.autoRedirectOutputMark == mark && mark != 0 {
+		return nil
+	}
 	if r.autoRedirectOutputMark > 0 {
 		return E.New("only one auto-redirect can be configured")
 	}

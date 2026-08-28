@@ -1,0 +1,73 @@
+name: DAE Integration
+
+on:
+  push:
+    branches:
+      - stable
+      - testing
+      - unstable
+    paths:
+      - '.github/workflows/dae.yml'
+      - 'adapter/**'
+      - 'constant/proxy.go'
+      - 'include/**'
+      - 'option/dae.go'
+      - 'protocol/dae/**'
+      - 'route/**'
+      - 'third_party/qpackcompat/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'release/**'
+  pull_request:
+    branches:
+      - stable
+      - testing
+      - unstable
+    paths:
+      - '.github/workflows/dae.yml'
+      - 'adapter/**'
+      - 'constant/proxy.go'
+      - 'include/**'
+      - 'option/dae.go'
+      - 'protocol/dae/**'
+      - 'route/**'
+      - 'third_party/qpackcompat/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'release/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test dae eBPF inbound
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ~1.26
+      - name: Test qpack compatibility module
+        working-directory: third_party/qpackcompat
+        run: go test ./...
+      - name: Test dae integration packages
+        shell: bash
+        run: |
+          go test -mod=readonly -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" \
+            -ldflags "$(cat release/LDFLAGS)" \
+            ./protocol/dae ./route/... ./include
+      - name: Build sing-box with dae
+        shell: bash
+        run: |
+          go build -mod=readonly -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" \
+            -ldflags "$(cat release/LDFLAGS)" \
+            ./cmd/sing-box
+      - name: Verify module files are unchanged
+        run: git diff --exit-code -- go.mod go.sum

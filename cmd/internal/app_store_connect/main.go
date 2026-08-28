@@ -173,7 +173,7 @@ func publishTestflight(ctx context.Context) error {
 		}
 		if localization.Attributes == nil || localization.Attributes.WhatsNew == nil || *localization.Attributes.WhatsNew == "" {
 			log.Info(string(platform), " ", tag, " update localization")
-			_, _, err = client.TestFlight.UpdateBetaBuildLocalization(ctx, localization.ID, common.Ptr(releaseNotes))
+			_, _, err = client.TestFlight.UpdateBetaBuildLocalization(ctx, localization.ID, new(releaseNotes))
 			if err != nil {
 				return err
 			}
@@ -291,7 +291,7 @@ func prepareAppStore(ctx context.Context) error {
 		if len(builds.Data) == 0 {
 			log.Fatal(string(platform), " ", tag, " no build found")
 		}
-		buildID := common.Ptr(builds.Data[0].ID)
+		buildID := new(builds.Data[0].ID)
 		if version.ID == "" {
 			log.Info(string(platform), " ", tag, " create version")
 			newVersion, _, err := client.Apps.CreateAppStoreVersion(ctx, asc.AppStoreVersionCreateRequestAttributes{
@@ -369,7 +369,7 @@ func prepareAppStore(ctx context.Context) error {
 		if localization.Attributes == nil || localization.Attributes.WhatsNew == nil || *localization.Attributes.WhatsNew == "" {
 			log.Info(string(platform), " ", tag, " update localization")
 			_, _, err = client.Apps.UpdateAppStoreVersionLocalization(ctx, localization.ID, &asc.AppStoreVersionLocalizationUpdateRequestAttributes{
-				PromotionalText: common.Ptr("Yet another distribution for sing-box, the universal proxy platform."),
+				PromotionalText: new("Yet another distribution for sing-box, the universal proxy platform."),
 				WhatsNew:        common.Ptr(F.ToString("sing-box ", tag, ": Fixes and improvements.")),
 			})
 			if err != nil {
