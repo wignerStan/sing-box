@@ -69,7 +69,7 @@ var (
 	_ adapter.OutboundWithPreferredRoutes = (*Endpoint)(nil)
 	_ adapter.InterfaceUpdateListener     = (*Endpoint)(nil)
 	_ dialer.PacketDialerWithDestination  = (*Endpoint)(nil)
-	_ tun.Port                            = (*Endpoint)(nil)
+	_ tun.Port                            = (*userspaceEndpoint)(nil)
 )
 
 func init() {
@@ -78,6 +78,13 @@ func init() {
 
 func RegisterEndpoint(registry *endpoint.Registry) {
 	endpoint.Register[option.TailscaleEndpointOptions](registry, C.TypeTailscale, NewEndpoint)
+}
+
+// userspaceEndpoint adds the packet-level tun.Port capability used by
+// sing-box flow routing. A system-interface endpoint intentionally does not
+// implement tun.Port: packets must traverse the real OS TUN exactly once.
+type userspaceEndpoint struct {
+	*Endpoint
 }
 
 type Endpoint struct {
@@ -130,6 +137,7 @@ type Endpoint struct {
 	started             atomic.Bool
 	systemTun           tun.Tun
 	systemDialer        *dialer.DefaultDialer
+	userspaceHandler    tun.Handler
 	fallbackTCPCloser   func()
 }
 
@@ -153,6 +161,9 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	stateDirectory = filemanager.BasePath(ctx, os.ExpandEnv(stateDirectory))
 	stateDirectory, _ = filepath.Abs(stateDirectory)
+	if options.SystemInterface && options.SSHServer != nil && options.SSHServer.Enabled {
+		return nil, E.New("Tailscale `ssh_server` requires the userspace service netstack and cannot be used with `system_interface`")
+	}
 	if options.SSHServer != nil && options.SSHServer.Enabled {
 		err := adapter.CheckSecurityFeature(ctx, "Tailscale `ssh_server`")
 		if err != nil {
@@ -191,7 +202,7 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	taildropDirectory = filemanager.BasePath(ctx, os.ExpandEnv(taildropDirectory))
 	taildropDirectory, _ = filepath.Abs(taildropDirectory)
-	return &Endpoint{
+	tailscaleEndpoint := &Endpoint{
 		Adapter:           endpoint.NewAdapter(C.TypeTailscale, tag, []string{N.NetworkTCP, N.NetworkUDP, N.NetworkICMP}, nil),
 		ctx:               ctx,
 		router:            router,
@@ -248,7 +259,30 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		systemInterfaceName:        options.SystemInterfaceName,
 		systemInterfaceMTU:         options.SystemInterfaceMTU,
 		keyAuth:                    options.AuthKey != "",
-	}, nil
+	}
+	if options.SystemInterface {
+		return tailscaleEndpoint, nil
+	}
+	userspaceEndpoint := &userspaceEndpoint{Endpoint: tailscaleEndpoint}
+	tailscaleEndpoint.userspaceHandler = userspaceEndpoint
+	return userspaceEndpoint, nil
+}
+
+func unwrapEndpoint(raw adapter.Endpoint) (*Endpoint, bool) {
+	switch endpoint := raw.(type) {
+	case *Endpoint:
+		return endpoint, true
+	case *userspaceEndpoint:
+		return endpoint.Endpoint, true
+	default:
+		return nil, false
+	}
+}
+
+func (t *Endpoint) configureDataPlane() {
+	if t.systemInterface {
+		t.server.DataPlaneMode = tsnet.DataPlaneSystem
+	}
 }
 
 func (t *Endpoint) Start(stage adapter.StartStage) error {
@@ -345,6 +379,7 @@ func (t *Endpoint) start() error {
 		t.systemTun = systemTun
 		t.systemDialer = systemDialer
 		t.server.Tun = wgTunDevice
+		t.configureDataPlane()
 	}
 	if t.network.AutoRedirectOutputMark() != 0 {
 		netns.SetControlFunc(t.network.AutoRedirectOutputMarkFunc())
@@ -407,19 +442,9 @@ func (t *Endpoint) postStart() error {
 		return err
 	}
 	t.serverStarted = true
-	if t.fallbackTCPCloser == nil {
-		t.fallbackTCPCloser = t.server.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
-			return func(conn net.Conn) {
-				ctx := log.ContextWithNewID(t.ctx)
-				source := M.SocksaddrFrom(src.Addr(), src.Port())
-				destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
-				t.NewConnectionEx(ctx, conn, source, destination, nil)
-			}, true
-		})
-	}
 	localBackend := t.server.ExportLocalBackend()
 	t.localBackend = localBackend
-	if !version.IsAppleTV() {
+	if !version.IsAppleTV() && !t.systemInterface {
 		registerTaildropEndpoint(localBackend, t)
 		go t.taildrop.start()
 	}
@@ -427,53 +452,10 @@ func (t *Endpoint) postStart() error {
 	wgEngine.SetOnReconfigListener(t.onReconfig)
 	t.wgEngine = wgEngine
 
-	ipStack := t.server.ExportNetstack().ExportIPStack()
-	gErr := ipStack.SetSpoofing(tun.DefaultNIC, true)
-	if gErr != nil {
-		return gonet.TranslateNetstackError(gErr)
-	}
-	gErr = ipStack.SetPromiscuousMode(tun.DefaultNIC, true)
-	if gErr != nil {
-		return gonet.TranslateNetstackError(gErr)
-	}
-	icmpForwarder := tun.NewICMPForwarder(ipStack, t, t.logger)
-	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, icmpForwarder.HandlePacket)
-	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, icmpForwarder.HandlePacket)
-	t.stack = ipStack
-	t.icmpForwarder = icmpForwarder
-	netstack := t.server.ExportNetstack()
-	if netstack != nil {
-		previousTCP := netstack.GetTCPHandlerForFlow
-		netstack.GetTCPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
-			if previousTCP != nil {
-				handler, intercept = previousTCP(src, dst)
-				if handler != nil || !intercept {
-					return handler, intercept
-				}
-			}
-			return func(conn net.Conn) {
-				ctx := log.ContextWithNewID(t.ctx)
-				source := M.SocksaddrFrom(src.Addr(), src.Port())
-				destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
-				t.NewConnectionEx(ctx, conn, source, destination, nil)
-			}, true
-		}
-
-		previousUDP := netstack.GetUDPHandlerForFlow
-		netstack.GetUDPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
-			if previousUDP != nil {
-				handler, intercept = previousUDP(src, dst)
-				if handler != nil || !intercept {
-					return handler, intercept
-				}
-			}
-			return func(conn nettype.ConnPacketConn) {
-				ctx := log.ContextWithNewID(t.ctx)
-				source := M.SocksaddrFrom(src.Addr(), src.Port())
-				destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
-				packetConn := bufio.NewUnbindPacketConnWithAddr(conn, destination)
-				t.NewPacketConnectionEx(ctx, packetConn, source, destination, nil)
-			}, true
+	if !t.systemInterface {
+		err = t.startUserspaceDataPlane()
+		if err != nil {
+			return err
 		}
 	}
 
@@ -505,6 +487,74 @@ func (t *Endpoint) postStart() error {
 	}
 	go t.watchState()
 	t.started.Store(true)
+	return nil
+}
+
+func (t *Endpoint) startUserspaceDataPlane() error {
+	if t.fallbackTCPCloser == nil {
+		t.fallbackTCPCloser = t.server.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+			return func(conn net.Conn) {
+				ctx := log.ContextWithNewID(t.ctx)
+				source := M.SocksaddrFrom(src.Addr(), src.Port())
+				destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
+				t.NewConnectionEx(ctx, conn, source, destination, nil)
+			}, true
+		})
+	}
+	netstack := t.server.ExportNetstack()
+	if netstack == nil {
+		return E.New("missing Tailscale userspace netstack")
+	}
+	ipStack := netstack.ExportIPStack()
+	gErr := ipStack.SetSpoofing(tun.DefaultNIC, true)
+	if gErr != nil {
+		return gonet.TranslateNetstackError(gErr)
+	}
+	gErr = ipStack.SetPromiscuousMode(tun.DefaultNIC, true)
+	if gErr != nil {
+		return gonet.TranslateNetstackError(gErr)
+	}
+	if t.userspaceHandler == nil {
+		return E.New("missing Tailscale userspace packet handler")
+	}
+	icmpForwarder := tun.NewICMPForwarder(ipStack, t.userspaceHandler, t.logger)
+	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, icmpForwarder.HandlePacket)
+	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, icmpForwarder.HandlePacket)
+	t.stack = ipStack
+	t.icmpForwarder = icmpForwarder
+
+	previousTCP := netstack.GetTCPHandlerForFlow
+	netstack.GetTCPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		if previousTCP != nil {
+			handler, intercept = previousTCP(src, dst)
+			if handler != nil || !intercept {
+				return handler, intercept
+			}
+		}
+		return func(conn net.Conn) {
+			ctx := log.ContextWithNewID(t.ctx)
+			source := M.SocksaddrFrom(src.Addr(), src.Port())
+			destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
+			t.NewConnectionEx(ctx, conn, source, destination, nil)
+		}, true
+	}
+
+	previousUDP := netstack.GetUDPHandlerForFlow
+	netstack.GetUDPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
+		if previousUDP != nil {
+			handler, intercept = previousUDP(src, dst)
+			if handler != nil || !intercept {
+				return handler, intercept
+			}
+		}
+		return func(conn nettype.ConnPacketConn) {
+			ctx := log.ContextWithNewID(t.ctx)
+			source := M.SocksaddrFrom(src.Addr(), src.Port())
+			destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
+			packetConn := bufio.NewUnbindPacketConnWithAddr(conn, destination)
+			t.NewPacketConnectionEx(ctx, packetConn, source, destination, nil)
+		}, true
+	}
 	return nil
 }
 

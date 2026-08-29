@@ -150,6 +150,8 @@ icon: material/new-box
 
 为 Tailscale 创建系统 TUN 接口。
 
+在此模式下，主机 TUN 是唯一的通用数据平面。不会创建内嵌 gVisor 网络栈，端点也不会暴露 `tun.Port` 流量路径。`ssh_server` 与 Taildrop 当前不可与 `system_interface` 同时使用。
+
 #### system_interface_name
 
 !!! question "自 sing-box 1.13.0 起"

@@ -151,6 +151,8 @@ Static endpoints to advertise for the relay server.
 
 Create a system TUN interface for Tailscale.
 
+In this mode the host TUN is the only general packet data plane. The embedded gVisor stack is not created, and the endpoint does not expose the `tun.Port` flow path. `ssh_server` and Taildrop are currently unavailable with `system_interface`.
+
 #### system_interface_name
 
 !!! question "Since sing-box 1.13.0"
