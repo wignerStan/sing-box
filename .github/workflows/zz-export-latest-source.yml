@@ -1,0 +1,29 @@
+name: Export latest source
+
+on:
+  push:
+    branches:
+      - tmp-export-latest-source
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: tmp-export-latest-source
+          fetch-depth: 0
+      - name: Archive source
+        run: |
+          git archive --format=tar.gz --output=/tmp/sing-box-latest.tar.gz HEAD
+          sha256sum /tmp/sing-box-latest.tar.gz > /tmp/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-latest-source
+          path: |
+            /tmp/sing-box-latest.tar.gz
+            /tmp/SHA256SUMS
+          retention-days: 7
