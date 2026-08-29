@@ -1,0 +1,174 @@
+name: Publish current-base dae hardening
+
+on:
+  push:
+    branches:
+      - tmp-dae-hardening-publisher-v2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-dae-hardening-v2
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: tmp-dae-hardening-publisher-v2
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.7
+          cache: false
+      - name: Rebase, validate, and republish one commit
+        shell: bash
+        env:
+          GOPROXY: direct
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/SagerNet/sing-box.git || true
+          git fetch upstream testing
+          BASE=$(git rev-parse upstream/testing)
+          FEATURE=$(git rev-parse origin/feat/dae-ebpf-hardening)
+
+          git checkout -B hardening "$BASE"
+          git cherry-pick "$FEATURE"
+
+          DAE_VERSION=$(go list -m -f '{{.Version}}' github.com/wignerStan/dae@feat/ebpfinbound-hardening)
+          DAE_DIR=$(go mod download -json github.com/wignerStan/dae@"$DAE_VERSION" | jq -r .Dir)
+          test -f "$DAE_DIR/control/ebpf_capture_ready_linux.go"
+          grep -q 'waitCaptureReady' "$DAE_DIR/control/ebpf_capture_ready_linux.go"
+          grep -q 'CloseSysctlManager' "$DAE_DIR/control/sysctl.go"
+
+          go mod edit -replace=github.com/daeuniverse/dae=github.com/wignerStan/dae@"$DAE_VERSION"
+          go mod tidy
+
+          cat > release/config/sing-box-dae.service <<'EOF'
+          [Unit]
+          Description=sing-box with dae eBPF capture
+          Documentation=https://sing-box.sagernet.org
+          After=network-online.target nss-lookup.target systemd-sysctl.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=root
+          StateDirectory=sing-box
+          ExecStartPre=/usr/bin/sing-box -D /var/lib/sing-box -C /etc/sing-box check
+          ExecStart=/usr/bin/sing-box -D /var/lib/sing-box -C /etc/sing-box run
+          ExecReload=/bin/kill -HUP $MAINPID
+          Restart=on-failure
+          RestartSec=5s
+          LimitNOFILE=1048576
+          LimitMEMLOCK=infinity
+          TimeoutStartSec=120
+          TimeoutStopSec=30
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          cat > .github/workflows/dae.yml <<'EOF'
+          name: DAE Integration
+
+          on:
+            pull_request:
+              branches: [stable, testing, unstable]
+              paths:
+                - '.github/workflows/dae.yml'
+                - 'adapter/**'
+                - 'constant/proxy.go'
+                - 'include/**'
+                - 'option/dae.go'
+                - 'protocol/dae/**'
+                - 'route/**'
+                - 'go.mod'
+                - 'go.sum'
+                - 'release/**'
+            push:
+              branches: [stable, testing, unstable]
+              paths:
+                - '.github/workflows/dae.yml'
+                - 'adapter/**'
+                - 'constant/proxy.go'
+                - 'include/**'
+                - 'option/dae.go'
+                - 'protocol/dae/**'
+                - 'route/**'
+                - 'go.mod'
+                - 'go.sum'
+                - 'release/**'
+
+          permissions:
+            contents: read
+
+          concurrency:
+            group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+            cancel-in-progress: true
+
+          jobs:
+            validate:
+              runs-on: ubuntu-24.04
+              steps:
+                - uses: actions/checkout@v6
+                - uses: actions/setup-go@v6
+                  with:
+                    go-version: 1.26.7
+                - name: Unit and route tests
+                  run: go test -mod=readonly -tags with_dae ./protocol/dae ./include ./route/...
+                - name: Vet dae integration
+                  run: go vet -mod=readonly -tags with_dae ./protocol/dae ./include ./route/...
+                - name: Build release feature set
+                  run: |
+                    go build -mod=readonly \
+                      -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" \
+                      -ldflags "$(cat release/LDFLAGS)" \
+                      -o /tmp/sing-box-dae ./cmd/sing-box
+                - name: Verify module files
+                  run: git diff --exit-code -- go.mod go.sum
+                - name: Package canary artifact
+                  run: |
+                    install -Dm755 /tmp/sing-box-dae /tmp/dae-artifact/sing-box
+                    install -Dm644 release/config/sing-box-dae.service /tmp/dae-artifact/sing-box-dae.service
+                    sha256sum /tmp/dae-artifact/* > /tmp/dae-artifact/SHA256SUMS
+                - uses: actions/upload-artifact@v4
+                  with:
+                    name: sing-box-dae-linux-amd64
+                    path: /tmp/dae-artifact
+                    retention-days: 7
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ('docs/configuration/inbound/dae.md', 'docs/configuration/inbound/dae.zh.md'):
+              path = Path(name)
+              if not path.exists():
+                  continue
+              text = path.read_text()
+              if name.endswith('/dae.md'):
+                  note = '''\n\n### Runtime readiness and host changes\n\nStartup does not return ready until all currently resolved capture interfaces have ingress and egress TC BPF filters. If automatic kernel configuration is enabled, modified sysctls are restored when the final runtime closes unless an administrator changed the value afterward. A stale or foreign `dae0`/`daens` resource is rejected instead of being deleted.\n\nThe checked-in `sing-box-dae.service` is a canary profile and runs as root because the current embedded provider creates network namespaces, routes, TC/cgroup programs, and BPF maps. Reduce privileges only after validating the exact target kernel and service manager.\n'''
+              else:
+                  note = '''\n\n### 运行时就绪与主机变更\n\n启动只有在所有已解析的捕获接口都安装了入口和出口 TC BPF 过滤器后才报告就绪。启用自动内核配置时，最终运行时关闭会恢复其修改的 sysctl；如果管理员之后修改了该值，则不会覆盖管理员变更。检测到陈旧或其他进程拥有的 `dae0`/`daens` 时会拒绝启动，而不是直接删除。\n\n仓库中的 `sing-box-dae.service` 是用于灰度验证的配置。当前嵌入式提供者需要创建网络命名空间、路由、TC/cgroup 程序和 BPF 映射，因此以 root 运行。只有在目标内核和服务管理器上验证后才应进一步收紧权限。\n'''
+              if note.strip() not in text:
+                  path.write_text(text + note)
+          PY
+
+          gofmt -w protocol/dae option/dae.go include/dae.go include/dae_stub.go constant/proxy.go adapter/inbound.go include/registry.go
+          go test -mod=readonly -tags with_dae ./protocol/dae ./include ./route/...
+          go vet -mod=readonly -tags with_dae ./protocol/dae ./include ./route/...
+          go build -mod=readonly -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
+          git diff --check
+
+          git config user.name Jacob
+          git config user.email 240170694+wignerStan@users.noreply.github.com
+          git add -A
+          git reset --soft "$BASE"
+          git commit -m 'feat(inbound): harden dae eBPF lifecycle and packaging'
+
+          git push --force origin "$BASE":refs/heads/testing
+          git push --force origin HEAD:refs/heads/feat/dae-ebpf-hardening
