@@ -1,0 +1,99 @@
+name: Publish linear dae hardening
+
+on:
+  push:
+    branches:
+      - tmp-dae-hardening-publisher
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-dae-hardening
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: tmp-dae-hardening-publisher
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.0
+          cache: false
+      - name: Build and publish one linear commit
+        shell: bash
+        env:
+          GOPROXY: direct
+        run: |
+          set -euo pipefail
+          BASE=72686480c54296bca29d7e3ab35f29b9dc6e4c4f
+          git reset --hard "$BASE"
+          git config user.name Jacob
+          git config user.email 240170694+wignerStan@users.noreply.github.com
+
+          if ! git cherry-pick 4ff80c5014b86e6c5f6fd3586c604a28c8446582; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            for file in "${conflicts[@]}"; do
+              case "$file" in
+                protocol/dae/*|option/dae.go|include/dae.go|include/dae_stub.go|docs/configuration/inbound/dae*|third_party/qpackcompat/*|.github/workflows/dae.yml)
+                  git checkout --theirs -- "$file"
+                  ;;
+                *)
+                  git checkout --ours -- "$file"
+                  ;;
+              esac
+              git add "$file"
+            done
+            GIT_EDITOR=true git cherry-pick --continue
+          fi
+
+          python3 .github/publisher/rewrite_dae_inbound.py
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path('constant/proxy.go')
+          s = p.read_text()
+          if 'TypeDAE' not in s:
+              marker = 'TypeTun'
+              pos = s.find(marker)
+              line_end = s.find('\n', pos)
+              s = s[:line_end + 1] + '\tTypeDAE = "dae"\n' + s[line_end + 1:]
+          p.write_text(s)
+
+          p = Path('adapter/inbound.go')
+          s = p.read_text()
+          if '\tDSCP' not in s:
+              s = s.replace('\tSourceMACAddress', '\tDSCP                                uint8\n\tSourceMACAddress', 1)
+          p.write_text(s)
+
+          p = Path('include/registry.go')
+          s = p.read_text()
+          if 'registerDAEInbound(registry)' not in s:
+              marker = 'func RegisterInbounds(registry *inbound.Registry) {'
+              start = s.index(marker) + len(marker)
+              s = s[:start] + '\n\tregisterDAEInbound(registry)' + s[start:]
+          p.write_text(s)
+          PY
+
+          DAE_VERSION=$(go list -m -f '{{.Version}}' github.com/wignerStan/dae@feat/ebpfinbound-hardening)
+          go mod edit -require=github.com/daeuniverse/dae@v0.0.0
+          go mod edit -replace=github.com/daeuniverse/dae=github.com/wignerStan/dae@"$DAE_VERSION"
+          go mod edit -replace=github.com/daeuniverse/outbound=github.com/olicesx/outbound@v0.0.0-sticky-ip.0.20260518034804-52c26f8e759e
+          go mod edit -replace=github.com/quic-go/qpack=./third_party/qpackcompat
+
+          gofmt -w protocol/dae option/dae.go include/dae.go include/dae_stub.go constant/proxy.go adapter/inbound.go include/registry.go
+          go mod tidy
+          go test -mod=readonly -tags with_dae ./protocol/dae ./include ./route/...
+          go build -mod=readonly -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
+          git diff --check
+
+          git add -A
+          git reset --soft "$BASE"
+          git commit -m 'feat(inbound): harden dae eBPF integration'
+          git push --force origin HEAD:feat/dae-ebpf-hardening
