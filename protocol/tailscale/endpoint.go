@@ -61,6 +61,7 @@ import (
 	"github.com/sagernet/tailscale/wgengine"
 	"github.com/sagernet/tailscale/wgengine/router"
 	"github.com/sagernet/tailscale/wgengine/wgcfg"
+	wgTun "github.com/sagernet/wireguard-go/tun"
 
 	mDNS "github.com/miekg/dns"
 )
@@ -135,10 +136,13 @@ type Endpoint struct {
 	keyAuth             bool
 	serverStarted       bool
 	started             atomic.Bool
-	systemTun           tun.Tun
-	systemDialer        *dialer.DefaultDialer
-	userspaceHandler    tun.Handler
-	fallbackTCPCloser   func()
+	// Tailscale's WireGuard engine owns this adapter after it is assigned to
+	// server.Tun. Keep the adapter for idempotent cleanup; closing the raw
+	// sing-tun device after Server.Close would close it a second time.
+	systemTunDevice   wgTun.Device
+	systemDialer      *dialer.DefaultDialer
+	userspaceHandler  tun.Handler
+	fallbackTCPCloser func()
 }
 
 func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TailscaleEndpointOptions) (adapter.Endpoint, error) {
@@ -376,7 +380,7 @@ func (t *Endpoint) start() error {
 			_ = systemTun.Close()
 			return err
 		}
-		t.systemTun = systemTun
+		t.systemTunDevice = wgTunDevice
 		t.systemDialer = systemDialer
 		t.server.Tun = wgTunDevice
 		t.configureDataPlane()
@@ -436,8 +440,12 @@ func (t *Endpoint) listenPacket(ctx context.Context, network string, address str
 func (t *Endpoint) postStart() error {
 	err := t.server.Start()
 	if err != nil {
-		if t.systemTun != nil {
-			_ = t.systemTun.Close()
+		// tsnet may already have run its error cleanup (which closes the
+		// WireGuard device). The adapter's Close is once-guarded, so it is
+		// safe to release the ownership retained by start in either case.
+		if t.systemTunDevice != nil {
+			_ = t.systemTunDevice.Close()
+			t.systemTunDevice = nil
 		}
 		return err
 	}
@@ -784,9 +792,11 @@ func (t *Endpoint) Close() error {
 		t.fallbackTCPCloser()
 		t.fallbackTCPCloser = nil
 	}
-	if t.systemTun != nil {
-		t.systemTun.Close()
-		t.systemTun = nil
+	if t.systemTunDevice != nil {
+		// Server.Close normally closes this first through wgengine. The
+		// adapter owns the raw TUN and makes this second cleanup harmless.
+		_ = t.systemTunDevice.Close()
+		t.systemTunDevice = nil
 	}
 	return err
 }
