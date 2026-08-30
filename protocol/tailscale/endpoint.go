@@ -134,7 +134,7 @@ type Endpoint struct {
 	systemInterfaceName string
 	systemInterfaceMTU  uint32
 	keyAuth             bool
-	serverStarted       bool
+	serverStarted       atomic.Bool
 	started             atomic.Bool
 	// Tailscale's WireGuard engine owns this adapter after it is assigned to
 	// server.Tun. Keep the adapter for idempotent cleanup; closing the raw
@@ -142,6 +142,7 @@ type Endpoint struct {
 	systemTunDevice    wgTun.Device
 	systemDialer       *dialer.DefaultDialer
 	systemRouteManager systemRouteManager
+	systemRouteMu      sync.Mutex
 	exitNodeActive     atomic.Bool
 	userspaceHandler   tun.Handler
 	fallbackTCPCloser  func()
@@ -385,7 +386,9 @@ func (t *Endpoint) start() error {
 		}
 		t.systemTunDevice = wgTunDevice
 		t.systemDialer = systemDialer
+		t.systemRouteMu.Lock()
 		t.systemRouteManager = newSystemRouteManager(tunName)
+		t.systemRouteMu.Unlock()
 		t.server.Tun = wgTunDevice
 		t.configureDataPlane()
 	}
@@ -447,17 +450,14 @@ func (t *Endpoint) postStart() error {
 		// tsnet may already have run its error cleanup (which closes the
 		// WireGuard device). The adapter's Close is once-guarded, so it is
 		// safe to release the ownership retained by start in either case.
-		if t.systemRouteManager != nil {
-			_ = t.systemRouteManager.Close()
-			t.systemRouteManager = nil
-		}
+		t.closeSystemRouteManager()
 		if t.systemTunDevice != nil {
 			_ = t.systemTunDevice.Close()
 			t.systemTunDevice = nil
 		}
 		return err
 	}
-	t.serverStarted = true
+	t.serverStarted.Store(true)
 	localBackend := t.server.ExportLocalBackend()
 	t.localBackend = localBackend
 	if !version.IsAppleTV() && !t.systemInterface {
@@ -786,14 +786,9 @@ func (t *Endpoint) Logout(ctx context.Context) error {
 func (t *Endpoint) Close() error {
 	var err error
 	t.started.Store(false)
-	if t.systemRouteManager != nil {
-		// Remove the scoped defaults while the utun still exists. The route
-		// manager is deliberately separate from Tailscale's router because
-		// the latter must not install a process-wide exit route.
-		if routeErr := t.systemRouteManager.Close(); routeErr != nil {
-			err = routeErr
-		}
-		t.systemRouteManager = nil
+	serverWasStarted := t.serverStarted.Swap(false)
+	if routeErr := t.closeSystemRouteManager(); routeErr != nil {
+		err = routeErr
 	}
 	if t.localBackend != nil {
 		unregisterTaildropEndpoint(t.localBackend)
@@ -806,9 +801,8 @@ func (t *Endpoint) Close() error {
 	}
 	common.Close(common.PtrOrNil(t.sshServerInstance))
 	t.sshServerInstance = nil
-	if t.serverStarted {
+	if serverWasStarted {
 		err = E.Errors(err, common.Close(common.PtrOrNil(t.server)))
-		t.serverStarted = false
 	}
 	netmon.RegisterInterfaceGetter(nil)
 	netns.SetControlFunc(nil)
@@ -1103,7 +1097,12 @@ func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 }
 
 func (t *Endpoint) updateSystemRoutes() {
-	if t.systemRouteManager == nil || t.server == nil || !t.serverStarted {
+	if t.server == nil || !t.serverStarted.Load() {
+		return
+	}
+	t.systemRouteMu.Lock()
+	defer t.systemRouteMu.Unlock()
+	if t.systemRouteManager == nil || !t.serverStarted.Load() {
 		return
 	}
 	ip4, ip6 := t.server.TailscaleIPs()
@@ -1111,6 +1110,17 @@ func (t *Endpoint) updateSystemRoutes() {
 	if err := t.systemRouteManager.Update(enabled, ip4, ip6); err != nil {
 		t.logger.Warn("update Tailscale system exit routes: ", err)
 	}
+}
+
+func (t *Endpoint) closeSystemRouteManager() error {
+	t.systemRouteMu.Lock()
+	defer t.systemRouteMu.Unlock()
+	if t.systemRouteManager == nil {
+		return nil
+	}
+	err := t.systemRouteManager.Close()
+	t.systemRouteManager = nil
+	return err
 }
 
 func addressFromAddr(destination netip.Addr) tcpip.Address {
