@@ -1,0 +1,31 @@
+name: Export dae hardening source v2
+
+on:
+  push:
+    branches:
+      - tmp/export-dae-hardening-source-20260830-v2
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: tmp/export-dae-hardening-source-20260830-v2
+          fetch-depth: 0
+      - name: Archive exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz --output=/tmp/sing-box-latest-v2.tar.gz HEAD
+          sha256sum /tmp/sing-box-latest-v2.tar.gz > /tmp/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-latest-v2-source
+          path: |
+            /tmp/sing-box-latest-v2.tar.gz
+            /tmp/SHA256SUMS
+          retention-days: 2
