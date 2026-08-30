@@ -153,6 +153,13 @@ Create a system TUN interface for Tailscale.
 
 In this mode the host TUN is the only general packet data plane. The embedded gVisor stack is not created, and the endpoint does not expose the `tun.Port` flow path. `ssh_server` and Taildrop are currently unavailable with `system_interface`.
 
+On Darwin, when an `exit_node` is selected, sing-box also maintains
+interface-scoped IPv4 and IPv6 default routes for this TUN. The routes use
+the local Tailscale address as the interface address and are used only by
+sockets bound to `system_interface`; Tailscale control-plane sockets remain
+on the normal network interface. A family is omitted until Tailscale has an
+address for it, so IPv4-only networks continue to work.
+
 #### system_interface_name
 
 !!! question "Since sing-box 1.13.0"

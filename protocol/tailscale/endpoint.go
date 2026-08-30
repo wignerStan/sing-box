@@ -139,10 +139,12 @@ type Endpoint struct {
 	// Tailscale's WireGuard engine owns this adapter after it is assigned to
 	// server.Tun. Keep the adapter for idempotent cleanup; closing the raw
 	// sing-tun device after Server.Close would close it a second time.
-	systemTunDevice   wgTun.Device
-	systemDialer      *dialer.DefaultDialer
-	userspaceHandler  tun.Handler
-	fallbackTCPCloser func()
+	systemTunDevice    wgTun.Device
+	systemDialer       *dialer.DefaultDialer
+	systemRouteManager systemRouteManager
+	exitNodeActive     atomic.Bool
+	userspaceHandler   tun.Handler
+	fallbackTCPCloser  func()
 }
 
 func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TailscaleEndpointOptions) (adapter.Endpoint, error) {
@@ -264,6 +266,7 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		systemInterfaceMTU:         options.SystemInterfaceMTU,
 		keyAuth:                    options.AuthKey != "",
 	}
+	tailscaleEndpoint.exitNodeActive.Store(options.ExitNode != "")
 	if options.SystemInterface {
 		return tailscaleEndpoint, nil
 	}
@@ -382,6 +385,7 @@ func (t *Endpoint) start() error {
 		}
 		t.systemTunDevice = wgTunDevice
 		t.systemDialer = systemDialer
+		t.systemRouteManager = newSystemRouteManager(tunName)
 		t.server.Tun = wgTunDevice
 		t.configureDataPlane()
 	}
@@ -443,6 +447,10 @@ func (t *Endpoint) postStart() error {
 		// tsnet may already have run its error cleanup (which closes the
 		// WireGuard device). The adapter's Close is once-guarded, so it is
 		// safe to release the ownership retained by start in either case.
+		if t.systemRouteManager != nil {
+			_ = t.systemRouteManager.Close()
+			t.systemRouteManager = nil
+		}
 		if t.systemTunDevice != nil {
 			_ = t.systemTunDevice.Close()
 			t.systemTunDevice = nil
@@ -593,6 +601,9 @@ func (t *Endpoint) watchState() {
 				return true
 			}
 			status := localBackend.StatusWithoutPeers()
+			prefs := localBackend.Prefs()
+			t.exitNodeActive.Store(prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid() || prefs.AutoExitNode().IsSet())
+			t.updateSystemRoutes()
 			running = status.BackendState == ipn.Running.String()
 			switch status.BackendState {
 			case ipn.NoState.String(), ipn.NeedsLogin.String():
@@ -689,6 +700,9 @@ func (t *Endpoint) applyExitNode() error {
 		return err
 	}
 	_, err = t.server.ExportLocalBackend().EditPrefs(perfs)
+	if err == nil {
+		t.exitNodeActive.Store(t.exitNode != "")
+	}
 	return err
 }
 
@@ -732,6 +746,7 @@ func (t *Endpoint) SetTailscaleExitNode(ctx context.Context, stableID string) er
 	if err != nil {
 		return E.Cause(err, "update prefs")
 	}
+	t.exitNodeActive.Store(stableID != "")
 	return nil
 }
 
@@ -764,12 +779,22 @@ func (t *Endpoint) Logout(ctx context.Context) error {
 	if err != nil {
 		return E.Cause(err, "start interactive login")
 	}
+	t.exitNodeActive.Store(false)
 	return nil
 }
 
 func (t *Endpoint) Close() error {
 	var err error
 	t.started.Store(false)
+	if t.systemRouteManager != nil {
+		// Remove the scoped defaults while the utun still exists. The route
+		// manager is deliberately separate from Tailscale's router because
+		// the latter must not install a process-wide exit route.
+		if routeErr := t.systemRouteManager.Close(); routeErr != nil {
+			err = routeErr
+		}
+		t.systemRouteManager = nil
+	}
 	if t.localBackend != nil {
 		unregisterTaildropEndpoint(t.localBackend)
 		t.localBackend = nil
@@ -782,7 +807,7 @@ func (t *Endpoint) Close() error {
 	common.Close(common.PtrOrNil(t.sshServerInstance))
 	t.sshServerInstance = nil
 	if t.serverStarted {
-		err = common.Close(common.PtrOrNil(t.server))
+		err = E.Errors(err, common.Close(common.PtrOrNil(t.server)))
 		t.serverStarted = false
 	}
 	netmon.RegisterInterfaceGetter(nil)
@@ -809,6 +834,7 @@ func (t *Endpoint) InterfaceUpdated(ctx context.Context) {
 	if loaded && netMon != nil {
 		netMon.InjectEvent()
 	}
+	t.updateSystemRoutes()
 }
 
 func (t *Endpoint) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
@@ -1036,6 +1062,11 @@ func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 	if cfg == nil || dnsCfg == nil {
 		return
 	}
+	// The Tailscale fork intentionally removes exit-node /0 routes from the
+	// OS router configuration. Reconcile the scoped defaults independently so
+	// sockets bound to this system interface still reach the selected exit
+	// node without hijacking Tailscale's control-plane sockets.
+	t.updateSystemRoutes()
 	// The engine invokes the listener on every Reconfig call, including
 	// unchanged ones: SSH policy lives only in the netmap, outside the
 	// three configs, so the SSH hook must run before the change check.
@@ -1068,6 +1099,17 @@ func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 
 	if t.onReconfigHook != nil {
 		t.onReconfigHook(cfg, routerCfg, dnsCfg)
+	}
+}
+
+func (t *Endpoint) updateSystemRoutes() {
+	if t.systemRouteManager == nil || t.server == nil || !t.serverStarted {
+		return
+	}
+	ip4, ip6 := t.server.TailscaleIPs()
+	enabled := t.exitNodeActive.Load()
+	if err := t.systemRouteManager.Update(enabled, ip4, ip6); err != nil {
+		t.logger.Warn("update Tailscale system exit routes: ", err)
 	}
 }
 
