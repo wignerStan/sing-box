@@ -60,6 +60,10 @@ icon: material/new-box
 
 示例：`$HOME/.tailscale`
 
+同时运行多个 Tailscale 端点时，应为每个端点使用独立的状态目录（并最好使用
+不同的主机名）。如果认证密钥的 tailnet 策略允许复用，同一个可复用密钥即可
+分别授权这些实例。
+
 #### auth_key
 
 !!! note
@@ -156,7 +160,18 @@ icon: material/new-box
 IPv4/IPv6 默认路由。路由使用本机 Tailscale 地址作为接口地址，仅供绑定到
 `system_interface` 的套接字使用；Tailscale 控制面套接字仍走普通网络接口。
 当某个地址族尚未获得 Tailscale 地址时会暂不安装对应路由，因此仅有 IPv4
-的网络仍可正常工作。
+的网络仍可正常工作。链路切换期间，如果某个地址族的路由已经存在，会在
+Tailscale 发布新地址或退出节点被禁用前保留该路由。
+
+按接口路由会携带与 TUN 相同且锁定的 MTU 指标。这在 Darwin 上是必要的：
+否则未限定的路由缓存可能继承物理网卡的 1500 字节 TCP MSS，向配置的
+TUN MTU（默认 1280）写入过大的数据包。若发现旧路由已经存在，sing-box 会先
+通过 `RTM_CHANGE` 修复后再接管。路由同步独立于 Tailscale 重配置回调，并会
+在端点运行期间重试失败的同步。路由选择依赖 `IP_BOUND_IF`/`bind_interface`；
+仅绑定源地址并不等价，仍可能使用物理路由的 MSS。
+
+从外部按接口路由监视器迁移时，应先停止该监视器，再启用此模式，避免两个
+路由所有者同时改写同一接口。端点接管后应保持外部监视器禁用。
 
 #### system_interface_name
 

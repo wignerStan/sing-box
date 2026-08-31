@@ -10,7 +10,7 @@ import "net/netip"
 // integration; this no-op keeps the endpoint buildable there.
 type unsupportedSystemRouteManager struct{}
 
-func newSystemRouteManager(_ string) systemRouteManager {
+func newSystemRouteManager(_ string, _ ...uint32) systemRouteManager {
 	return unsupportedSystemRouteManager{}
 }
 
