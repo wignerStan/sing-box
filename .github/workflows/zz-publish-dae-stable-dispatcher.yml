@@ -1,0 +1,251 @@
+name: Build and publish stable dae dispatcher
+
+on:
+  push:
+    branches:
+      - tmp/publish-dae-stable-20260831
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: publish-dae-stable-dispatcher
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.7
+          cache: false
+      - name: Wait for standalone provider
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for attempt in $(seq 1 120); do
+            if git ls-remote --exit-code https://github.com/wignerStan/dae.git refs/heads/feat/ebpfinbound-stable-runtime >/tmp/provider-ref 2>/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'standalone provider branch was not published' >&2
+          exit 1
+      - name: Rebuild integration on current testing
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git fetch origin testing feat/dae-ebpf-direct-inbound-fixed tmp-dae-hardening-publisher-v2
+          BASE=$(git rev-parse origin/testing)
+          echo "$BASE" >/tmp/base
+          OLD=$(git rev-parse origin/feat/dae-ebpf-direct-inbound-fixed)
+          SCRIPT_REF=$(git rev-parse origin/tmp-dae-hardening-publisher-v2)
+
+          git checkout -B build "$BASE"
+          set +e
+          git cherry-pick --no-commit "$OLD"
+          result=$?
+          set -e
+          if [ "$result" -ne 0 ]; then
+            conflicts=$(git diff --name-only --diff-filter=U)
+            for path in $conflicts; do
+              case "$path" in
+                go.mod|go.sum)
+                  git checkout --ours -- "$path"
+                  ;;
+                protocol/dae/*|option/dae.go|include/dae.go|include/dae_stub.go|docs/configuration/inbound/dae.md|docs/configuration/inbound/dae.zh.md|release/config/sing-box-dae.service|.github/workflows/dae.yml)
+                  git checkout --theirs -- "$path"
+                  ;;
+                *)
+                  echo "unresolved current-source conflict: $path" >&2
+                  exit 1
+                  ;;
+              esac
+              git add -- "$path"
+            done
+            test -z "$(git diff --name-only --diff-filter=U)"
+          fi
+
+          git show "$SCRIPT_REF":.github/publisher/rewrite_dae_inbound.py >/tmp/rewrite_dae_inbound.py
+          python3 /tmp/rewrite_dae_inbound.py
+      - name: Pin standalone provider and enforce stable ownership
+        shell: bash
+        env:
+          GOPROXY: direct
+          GONOSUMDB: github.com/wignerStan/*
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('.')
+          for path in root.rglob('*.go'):
+              text=path.read_text(errors='replace')
+              new=text.replace('github.com/daeuniverse/dae/pkg/ebpfinbound/embedded','github.com/wignerStan/dae/ebpfinbound/embedded')
+              new=new.replace('github.com/daeuniverse/dae/pkg/ebpfinbound','github.com/wignerStan/dae/ebpfinbound')
+              if new != text:
+                  path.write_text(new)
+
+          path=Path('protocol/dae/inbound_linux.go')
+          text=path.read_text()
+          if 'stable *ebpfinbound.StableCapture' not in text:
+              text=text.replace(
+                  'runtime ebpfinbound.Runtime\n\tgeneration ebpfinbound.Generation',
+                  'runtime ebpfinbound.Runtime\n\tgeneration ebpfinbound.Generation\n\tstable *ebpfinbound.StableCapture',
+                  1,
+              )
+          old='''generation, err := runtime.OpenGeneration(i.ctx, i.capture.TProxyPort)
+          \tif err != nil {
+          \t\t_ = runtime.Close()
+          \t\treturn E.Cause(err, "open dae listener generation")
+          \t}
+          \tcleanup := func() {
+          \t\t_ = generation.Close()
+          \t\t_ = runtime.Close()
+          \t}'''.replace('          ','')
+          new='''stable, err := ebpfinbound.StartStable(i.ctx, runtime, i.capture.TProxyPort)
+          \tif err != nil {
+          \t\treturn E.Cause(err, "start stable dae capture")
+          \t}
+          \tgeneration := stable.Generation
+          \tcleanup := func() {
+          \t\t_ = stable.Close()
+          \t}'''.replace('          ','')
+          if old not in text:
+              raise SystemExit('stable startup marker not found')
+          text=text.replace(old,new,1)
+          text=text.replace(
+              'runtime: runtime,\n\t\tgeneration: generation,',
+              'runtime: stable.Runtime,\n\t\tgeneration: stable.Generation,\n\t\tstable: stable,',
+              1,
+          )
+          old_commit='''capture.active.Store(i)
+          \tcapture.startLoops()
+          \tif err = runtime.CommitGeneration(i.ctx, generation); err != nil {
+          \t\t_ = capture.Close()
+          \t\treturn E.Cause(err, "commit dae listener generation")
+          \t}'''.replace('          ','')
+          if old_commit not in text:
+              raise SystemExit('old listener publication marker not found')
+          text=text.replace(old_commit,'capture.active.Store(i)\n\tcapture.startLoops()',1)
+
+          text=text.replace(
+              'if flags&(unix.MSG_TRUNC|unix.MSG_CTRUNC) != 0 || n == len(payload) {',
+              'if flags&(unix.MSG_TRUNC|unix.MSG_CTRUNC) != 0 {',
+          )
+
+          if 'connections sync.Map' not in text:
+              text=text.replace(
+                  'waiter sync.WaitGroup\n\tcloseOnce sync.Once',
+                  'waiter sync.WaitGroup\n\tconnections sync.Map\n\tconnectionWaiter sync.WaitGroup\n\tcloseOnce sync.Once',
+                  1,
+              )
+          old_go='go inbound.handleTCP(conn)'
+          new_go='''s.connections.Store(conn, struct{}{})
+          \t\ts.connectionWaiter.Add(1)
+          \t\tgo func() {
+          \t\t\tdefer s.connectionWaiter.Done()
+          \t\t\tdefer s.connections.Delete(conn)
+          \t\t\tinbound.handleTCP(conn)
+          \t\t}()'''.replace('          ','')
+          if old_go not in text:
+              raise SystemExit('TCP dispatch marker not found')
+          text=text.replace(old_go,new_go,1)
+
+          close_start=text.index('func (s *captureService) Close() error {')
+          brace=text.index('{',close_start)
+          depth=0
+          end=None
+          quote=None
+          escaped=False
+          for index in range(brace,len(text)):
+              char=text[index]
+              if quote:
+                  if escaped: escaped=False
+                  elif char=='\\': escaped=True
+                  elif char==quote: quote=None
+              else:
+                  if char in ('"',"'",'`'): quote=char
+                  elif char=='{': depth+=1
+                  elif char=='}':
+                      depth-=1
+                      if depth==0:
+                          end=index+1
+                          break
+          if end is None: raise SystemExit('captureService.Close end not found')
+          replacement=r'''func (s *captureService) Close() error {
+          	s.closeOnce.Do(func() {
+          		s.cancel()
+          		if s.stable != nil {
+          			s.closeErr = s.stable.Close()
+          		} else {
+          			var generationErr, runtimeErr error
+          			if s.generation != nil { generationErr = s.generation.Close() }
+          			if s.runtime != nil { runtimeErr = s.runtime.Close() }
+          			s.closeErr = stderrors.Join(generationErr, runtimeErr)
+          		}
+          		s.waiter.Wait()
+          		s.connections.Range(func(key, _ any) bool {
+          			if conn, ok := key.(net.Conn); ok { _ = conn.Close() }
+          			return true
+          		})
+          		s.connectionWaiter.Wait()
+          		if s.udpNat != nil { s.udpNat.Close() }
+          	})
+          	return s.closeErr
+          }'''.replace('          ','')
+          text=text[:close_start]+replacement+text[end:]
+          path.write_text(text)
+          PY
+
+          go mod edit -dropreplace=github.com/quic-go/qpack || true
+          go mod edit -dropreplace=github.com/daeuniverse/dae || true
+          go mod edit -droprequire=github.com/daeuniverse/dae || true
+          rm -rf third_party/qpackcompat
+          go get github.com/wignerStan/dae/ebpfinbound@feat/ebpfinbound-stable-runtime
+          go mod tidy
+      - name: Validate review invariants
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ! grep -R 'CloneGeneration\|CommitGeneration' protocol/dae
+          test -z "$(find protocol/dae -type f -name '*.go' -exec grep -l 'n == len(payload)' {} + || true)"
+          test ! -d third_party/qpackcompat
+          ! grep -q 'github.com/daeuniverse/dae v' go.mod
+          ! grep -q 'github.com/quic-go/qpack =>' go.mod
+          gofmt -w protocol/dae option/dae.go include/dae.go include/dae_stub.go constant/proxy.go adapter/inbound.go include/registry.go
+          git diff --check
+      - name: Test and build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          go test -mod=readonly -tags with_dae ./protocol/dae ./include ./route/...
+          go test -race -mod=readonly -tags with_dae ./protocol/dae ./route/...
+          go vet -mod=readonly -tags with_dae ./protocol/dae ./include ./route/...
+          go build -mod=readonly -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
+          go test ./...
+      - name: Commit, publish, and open PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          BASE=$(cat /tmp/base)
+          git add -A
+          git diff --cached --check
+          git config user.name Jacob
+          git config user.email 240170694+wignerStan@users.noreply.github.com
+          git reset --soft "$BASE"
+          git commit -m 'feat(inbound): add stable dae eBPF dispatcher'
+          git push --force origin HEAD:refs/heads/feat/dae-ebpf-stable-dispatcher
+
+          if gh pr view feat/dae-ebpf-stable-dispatcher --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh pr edit feat/dae-ebpf-stable-dispatcher --repo "$GITHUB_REPOSITORY" --base testing --title 'feat(inbound): add stable dae eBPF dispatcher'
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --draft --base testing --head feat/dae-ebpf-stable-dispatcher --title 'feat(inbound): add stable dae eBPF dispatcher' --body 'Adds one stable dae listener service and atomically replaces only the active sing-box handler during policy reload. This addresses the review finding that cloned TCP/UDP listener descriptors are concurrent consumers, not staged generations. It also fixes commit-before-receive ordering, TCP shutdown draining, UDP truncation detection, and removes the root dae/qpack compatibility dependency.'
+          fi
