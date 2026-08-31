@@ -14,7 +14,12 @@ PREFIX ?= $(shell go env GOPATH)
 SING_FFI ?= sing-ffi
 LIBBOX_FFI_CONFIG ?= ./experimental/libbox/ffi.json
 
-.PHONY: test release docs build schema
+.PHONY: test release docs build schema dae-contract-test
+
+# Linux-only contract and lifecycle tests for the dae eBPF handoff. The
+# package tests use temporary Unix sockets and do not touch the host datapath.
+dae-contract-test:
+	GOTOOLCHAIN=auto go test -race -v ./common/daeipc ./protocol/dae
 
 build:
 	export GOTOOLCHAIN=local && \

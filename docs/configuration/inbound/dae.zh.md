@@ -85,3 +85,12 @@ DAE_EXTERNAL_POLICY_UID=0
 
 控制通道只传输监听器描述符和五元组元数据；应用数据始终留在交接后的内核
 套接字上。
+
+## 测试与生命周期
+
+在 Linux 上运行 `make dae-contract-test`，可覆盖协议封装、描述符所有权、注册校验、
+代际替换和会话取消路径；测试使用临时套接字，不会安装数据面或修改主机路由。
+
+重启 sing-box 后，dae 会按设计回收旧的 external-policy 代际。请先启动此 inbound，
+再 reload/重启 dae，dae 才会发布新代际；这样既保持失败关闭，也不会意外回退到
+dae 的旧用户态路由。

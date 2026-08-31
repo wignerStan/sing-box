@@ -90,3 +90,15 @@ own DNS listener, sniffing, or userspace route matcher.
 
 The control channel carries only listener descriptors and tuple metadata;
 application payload stays on the transferred kernel sockets.
+
+## Testing and lifecycle
+
+Run `make dae-contract-test` on Linux to exercise the protocol envelope,
+descriptor ownership, registration validation, generation replacement, and
+session cancellation paths with temporary sockets. The tests do not install a
+datapath or change host routes.
+
+When sing-box is restarted, dae's previous external-policy generation is
+retired by design. Start this inbound first and reload/restart dae afterward;
+dae will then publish a new generation. This keeps the mode fail-closed while
+avoiding accidental fallback to dae's legacy userspace routing.
