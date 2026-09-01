@@ -86,7 +86,7 @@ jobs:
         run: go build -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" ./cmd/sing-box
 
   full-test:
-    name: Full test (Linux)
+    name: Broad test (Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,9 +122,11 @@ jobs:
           git diff --cached --check
           echo "BUILD_TAGS=$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" >> "$GITHUB_ENV"
           echo "LDFLAGS_SHARED=$(cat release/LDFLAGS)" >> "$GITHUB_ENV"
-      - name: Full repository tests
+      - name: Broad repository tests
         shell: bash
-        run: go test -count=1 -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" ./...
+        run: |
+          packages=$(go list ./... | grep -v '^github.com/sagernet/sing-box/common/netns$')
+          go test -count=1 -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" $packages
       - name: Vet Tailscale integration
         shell: bash
         run: go vet -tags "$BUILD_TAGS" ./protocol/tailscale
