@@ -1,0 +1,141 @@
+name: Validate and publish PR6 hardening v2
+
+on:
+  push:
+    branches:
+      - ci/pr6-hardening-publish-v2
+    paths:
+      - '.github/pr6-hardening-v2.patch.gz.b64'
+      - '.github/workflows/zz-pr6-hardening-publish-v2.yml'
+
+permissions:
+  contents: write
+
+env:
+  BASE_SHA: 1321f61998f1cf67f0d0b87a79a30f17292b4fe0
+  EXPECTED_TARGET_HEAD: 52c079614770fc6e4d9cc468998505f44c46734a
+  TARGET_BRANCH: fix/tailscale-system-interface-single-dataplane
+  PATCH_SHA256: a46e3e3f109f60425b86b1554fd0aa42b267849151d59b9041566b07e97398cb
+
+jobs:
+  focused:
+    name: Focused (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-14
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache: true
+      - name: Materialize clean candidate
+        shell: bash
+        run: |
+          cp .github/pr6-hardening-v2.patch.gz.b64 "$RUNNER_TEMP/patch.gz.b64"
+          base64 -d "$RUNNER_TEMP/patch.gz.b64" | gzip -d > "$RUNNER_TEMP/hardening.patch"
+          echo "$PATCH_SHA256  $RUNNER_TEMP/hardening.patch" | sha256sum -c -
+          git reset --hard "$BASE_SHA"
+          git clean -fdx
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
+          git diff --cached --check
+          test -z "$(gofmt -l protocol/tailscale)"
+      - name: Load build settings
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            tag_file=release/DEFAULT_BUILD_TAGS_WINDOWS
+          else
+            tag_file=release/DEFAULT_BUILD_TAGS_OTHERS
+          fi
+          echo "BUILD_TAGS=$(cat "$tag_file")" >> "$GITHUB_ENV"
+          echo "LDFLAGS_SHARED=$(cat release/LDFLAGS)" >> "$GITHUB_ENV"
+      - name: Focused tests
+        shell: bash
+        run: go test -count=1 -tags "$BUILD_TAGS" ./protocol/tailscale
+      - name: Focused race tests
+        if: runner.os != 'Windows'
+        shell: bash
+        run: go test -race -count=1 -tags "$BUILD_TAGS" ./protocol/tailscale
+      - name: Compile route integration
+        shell: bash
+        run: go test -run '^$' -count=1 -tags "$BUILD_TAGS" ./route/...
+      - name: Build sing-box
+        shell: bash
+        run: go build -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" ./cmd/sing-box
+
+  full-test:
+    name: Full test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache: true
+      - name: Materialize clean candidate
+        shell: bash
+        run: |
+          cp .github/pr6-hardening-v2.patch.gz.b64 "$RUNNER_TEMP/patch.gz.b64"
+          base64 -d "$RUNNER_TEMP/patch.gz.b64" | gzip -d > "$RUNNER_TEMP/hardening.patch"
+          echo "$PATCH_SHA256  $RUNNER_TEMP/hardening.patch" | sha256sum -c -
+          git reset --hard "$BASE_SHA"
+          git clean -fdx
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
+          git diff --cached --check
+          echo "BUILD_TAGS=$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" >> "$GITHUB_ENV"
+          echo "LDFLAGS_SHARED=$(cat release/LDFLAGS)" >> "$GITHUB_ENV"
+      - name: Full repository tests
+        shell: bash
+        run: go test -count=1 -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" ./...
+      - name: Vet Tailscale integration
+        shell: bash
+        run: go vet -tags "$BUILD_TAGS" ./protocol/tailscale
+
+  publish:
+    name: Publish clean hardening commit
+    needs:
+      - focused
+      - full-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache: false
+      - name: Create and publish clean commit
+        shell: bash
+        run: |
+          cp .github/pr6-hardening-v2.patch.gz.b64 "$RUNNER_TEMP/patch.gz.b64"
+          base64 -d "$RUNNER_TEMP/patch.gz.b64" | gzip -d > "$RUNNER_TEMP/hardening.patch"
+          echo "$PATCH_SHA256  $RUNNER_TEMP/hardening.patch" | sha256sum -c -
+          git reset --hard "$BASE_SHA"
+          git clean -fdx
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
+          git diff --cached --check
+          test -z "$(gofmt -l protocol/tailscale)"
+          git config user.name 'Jacob'
+          git config user.email '240170694+wignerStan@users.noreply.github.com'
+          git commit --signoff -m 'fix(tailscale): harden system route ownership and readiness'
+          final_sha=$(git rev-parse HEAD)
+          echo "Publishing clean PR head: $final_sha"
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$EXPECTED_TARGET_HEAD" origin "HEAD:refs/heads/$TARGET_BRANCH"
+          printf '%s\n' "$final_sha" > "$RUNNER_TEMP/final-sha.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr6-hardening-final-sha
+          path: ${{ runner.temp }}/final-sha.txt
+          if-no-files-found: error
+          retention-days: 1
