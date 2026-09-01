@@ -1,0 +1,33 @@
+name: Export review-fix source
+
+on:
+  push:
+    branches:
+      - tmp/export-review-fix-sing-box-20260831
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Archive exact sing-box base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach 650ef881c8fb216259e4ebcfbd74234554c39612
+          git submodule update --init --recursive
+          tar --exclude=.git --exclude='*/.git' -czf /tmp/sing-box-source.tar.gz .
+          sha256sum /tmp/sing-box-source.tar.gz > /tmp/sing-box-source.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-review-fix-source
+          path: |
+            /tmp/sing-box-source.tar.gz
+            /tmp/sing-box-source.sha256
+          retention-days: 2
