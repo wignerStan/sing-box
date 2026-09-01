@@ -73,14 +73,14 @@ jobs:
           echo "LDFLAGS_SHARED=$(cat release/LDFLAGS)" >> "$GITHUB_ENV"
       - name: Focused tests
         shell: bash
-        run: go test -count=1 -tags "$BUILD_TAGS" ./protocol/tailscale
+        run: go test -count=1 -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" ./protocol/tailscale
       - name: Focused race tests
         if: runner.os != 'Windows'
         shell: bash
-        run: go test -race -count=1 -tags "$BUILD_TAGS" ./protocol/tailscale
+        run: go test -race -count=1 -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" ./protocol/tailscale
       - name: Compile route integration
         shell: bash
-        run: go test -run '^$' -count=1 -tags "$BUILD_TAGS" ./route/...
+        run: go test -run '^$' -count=1 -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" ./route/...
       - name: Build sing-box
         shell: bash
         run: go build -tags "$BUILD_TAGS" -ldflags "$LDFLAGS_SHARED" ./cmd/sing-box
