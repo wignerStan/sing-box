@@ -1,0 +1,35 @@
+name: Export old dae integration
+
+on:
+  push:
+    branches:
+      - tmp/export-old-dae-integration-20260901
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Archive integration files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach 4ff80c5014b86e6c5f6fd3586c604a28c8446582
+          mkdir -p /tmp/files
+          for path in protocol/dae option/dae.go include/dae.go include/dae_stub.go constant/proxy.go adapter/inbound.go include/registry.go route/network.go route/network_manager.go docs/configuration/inbound/dae.md docs/configuration/inbound/dae.zh.md release/config/sing-box-dae.service .github/workflows/dae.yml; do
+            if [ -e "$path" ]; then
+              mkdir -p "/tmp/files/$(dirname "$path")"
+              cp -a "$path" "/tmp/files/$path"
+            fi
+          done
+          tar -C /tmp/files -czf /tmp/old-dae-integration.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: old-dae-integration-source
+          path: /tmp/old-dae-integration.tar.gz
+          retention-days: 2
