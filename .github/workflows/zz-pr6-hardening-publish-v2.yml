@@ -36,12 +36,25 @@ jobs:
         with:
           go-version: '1.25.5'
           cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Materialize clean candidate
         shell: bash
         run: |
           cat .github/pr6-hardening-v2/part-* > "$RUNNER_TEMP/patch.gz.b64"
-          base64 -d "$RUNNER_TEMP/patch.gz.b64" | gzip -d > "$RUNNER_TEMP/hardening.patch"
-          echo "$PATCH_SHA256  $RUNNER_TEMP/hardening.patch" | sha256sum -c -
+          python - <<'PY'
+          import base64, gzip, hashlib, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          source = root / 'patch.gz.b64'
+          target = root / 'hardening.patch'
+          data = gzip.decompress(base64.b64decode(source.read_bytes()))
+          digest = hashlib.sha256(data).hexdigest()
+          expected = os.environ['PATCH_SHA256']
+          if digest != expected:
+              raise SystemExit(f'patch sha256 mismatch: {digest} != {expected}')
+          target.write_bytes(data)
+          PY
           git reset --hard "$BASE_SHA"
           git clean -fdx
           git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
@@ -82,12 +95,25 @@ jobs:
         with:
           go-version: '1.25.5'
           cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Materialize clean candidate
         shell: bash
         run: |
           cat .github/pr6-hardening-v2/part-* > "$RUNNER_TEMP/patch.gz.b64"
-          base64 -d "$RUNNER_TEMP/patch.gz.b64" | gzip -d > "$RUNNER_TEMP/hardening.patch"
-          echo "$PATCH_SHA256  $RUNNER_TEMP/hardening.patch" | sha256sum -c -
+          python - <<'PY'
+          import base64, gzip, hashlib, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          source = root / 'patch.gz.b64'
+          target = root / 'hardening.patch'
+          data = gzip.decompress(base64.b64decode(source.read_bytes()))
+          digest = hashlib.sha256(data).hexdigest()
+          expected = os.environ['PATCH_SHA256']
+          if digest != expected:
+              raise SystemExit(f'patch sha256 mismatch: {digest} != {expected}')
+          target.write_bytes(data)
+          PY
           git reset --hard "$BASE_SHA"
           git clean -fdx
           git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
@@ -115,12 +141,27 @@ jobs:
         with:
           go-version: '1.25.5'
           cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Create and publish clean commit
         shell: bash
         run: |
+          current_target=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+          test "$current_target" = "$EXPECTED_TARGET_HEAD"
           cat .github/pr6-hardening-v2/part-* > "$RUNNER_TEMP/patch.gz.b64"
-          base64 -d "$RUNNER_TEMP/patch.gz.b64" | gzip -d > "$RUNNER_TEMP/hardening.patch"
-          echo "$PATCH_SHA256  $RUNNER_TEMP/hardening.patch" | sha256sum -c -
+          python - <<'PY'
+          import base64, gzip, hashlib, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          source = root / 'patch.gz.b64'
+          target = root / 'hardening.patch'
+          data = gzip.decompress(base64.b64decode(source.read_bytes()))
+          digest = hashlib.sha256(data).hexdigest()
+          expected = os.environ['PATCH_SHA256']
+          if digest != expected:
+              raise SystemExit(f'patch sha256 mismatch: {digest} != {expected}')
+          target.write_bytes(data)
+          PY
           git reset --hard "$BASE_SHA"
           git clean -fdx
           git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
