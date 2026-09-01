@@ -60,6 +60,10 @@ The directory where the Tailscale state is stored.
 
 Example: `$HOME/.tailscale`
 
+When running more than one Tailscale endpoint concurrently, give each endpoint
+its own state directory (and preferably a distinct hostname). A reusable auth
+key can then authorize each instance according to the key's tailnet policy.
+
 #### auth_key
 
 !!! note
@@ -150,6 +154,40 @@ Static endpoints to advertise for the relay server.
 !!! question "Since sing-box 1.13.0"
 
 Create a system TUN interface for Tailscale.
+
+In this mode the host TUN is the only general packet data plane. The embedded gVisor stack is not created, and the endpoint does not expose the `tun.Port` flow path. `ssh_server` and Taildrop are currently unavailable with `system_interface`.
+
+On Darwin, when an `exit_node` is selected, sing-box also maintains
+interface-scoped IPv4 and IPv6 default routes for this TUN. The routes use
+the local Tailscale address as the interface address and are used only by
+sockets bound to `system_interface`; Tailscale control-plane sockets remain
+on the normal network interface. A family is omitted until Tailscale has an
+address for it, so IPv4-only networks continue to work. During a transient
+link handover, an already-installed family route is retained for a bounded
+grace period, but it is removed immediately if the system TUN interface index
+changes. Exit-node changes do not report success until the first definitive
+route reconciliation completes; transient address/interface races are retried
+with bounded exponential backoff, while permanent errors are returned.
+
+The scoped routes carry a locked MTU metric matching the TUN. This is required
+on Darwin because an unqualified route cache entry can otherwise inherit the
+physical interface's 1500-byte TCP MSS and deliver packets larger than the
+configured TUN MTU (1280 by default). When an older route is already present,
+sing-box repairs it with `RTM_CHANGE` before adopting it. Route reconciliation
+runs independently of the Tailscale reconfigure callback and retries failed
+reconciliations while the endpoint is active. The route is selected by
+`IP_BOUND_IF`/`bind_interface`; binding only a source address is not equivalent
+and may still use the physical route's MSS.
+
+When migrating from an external scoped-route supervisor, stop that supervisor
+before enabling this mode so two route owners cannot race over the same
+interface. Keep the supervisor disabled after the endpoint has taken ownership.
+
+Only one Tailscale endpoint can be active in a sing-box process. The Tailscale
+`netns` and network-monitor hooks used by the embedded server are process-global;
+sing-box rejects a second endpoint rather than allowing one endpoint to replace
+or clear another endpoint's hooks. Separate processes are also expected to use
+different system interfaces and must not manage the same scoped routes.
 
 #### system_interface_name
 

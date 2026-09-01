@@ -61,6 +61,7 @@ import (
 	"github.com/sagernet/tailscale/wgengine"
 	"github.com/sagernet/tailscale/wgengine/router"
 	"github.com/sagernet/tailscale/wgengine/wgcfg"
+	wgTun "github.com/sagernet/wireguard-go/tun"
 
 	mDNS "github.com/miekg/dns"
 )
@@ -69,7 +70,10 @@ var (
 	_ adapter.OutboundWithPreferredRoutes = (*Endpoint)(nil)
 	_ adapter.InterfaceUpdateListener     = (*Endpoint)(nil)
 	_ dialer.PacketDialerWithDestination  = (*Endpoint)(nil)
-	_ tun.Port                            = (*Endpoint)(nil)
+	_ tun.Port                            = (*userspaceEndpoint)(nil)
+
+	tailscaleGlobalHookAccess sync.Mutex
+	tailscaleGlobalHookOwner  *Endpoint
 )
 
 func init() {
@@ -78,6 +82,13 @@ func init() {
 
 func RegisterEndpoint(registry *endpoint.Registry) {
 	endpoint.Register[option.TailscaleEndpointOptions](registry, C.TypeTailscale, NewEndpoint)
+}
+
+// userspaceEndpoint adds the packet-level tun.Port capability used by
+// sing-box flow routing. A system-interface endpoint intentionally does not
+// implement tun.Port: packets must traverse the real OS TUN exactly once.
+type userspaceEndpoint struct {
+	*Endpoint
 }
 
 type Endpoint struct {
@@ -126,12 +137,35 @@ type Endpoint struct {
 	systemInterfaceName string
 	systemInterfaceMTU  uint32
 	keyAuth             bool
-	serverStarted       bool
+	serverStarted       atomic.Bool
 	started             atomic.Bool
-	systemTun           tun.Tun
-	systemDialer        *dialer.DefaultDialer
-	fallbackTCPCloser   func()
+	// Tailscale's WireGuard engine owns this adapter after it is assigned to
+	// server.Tun. Keep the adapter for idempotent cleanup; closing the raw
+	// sing-tun device after Server.Close would close it a second time.
+	systemTunDevice       wgTun.Device
+	systemDialer          *dialer.DefaultDialer
+	systemRouteManager    systemRouteManager
+	systemRouteMu         sync.Mutex
+	systemRouteUpdate     chan struct{}
+	systemRouteStop       chan struct{}
+	systemRouteWG         sync.WaitGroup
+	systemRouteStopping   bool
+	systemRouteGeneration uint64
+	systemRouteWaiters    map[uint64]chan error
+	exitNodeUpdateMu      sync.Mutex
+	exitNodeActive        atomic.Bool
+	globalHooksAcquired   bool
+	userspaceHandler      tun.Handler
+	fallbackTCPCloser     func()
 }
+
+const (
+	systemRouteRetryMinDelay = 250 * time.Millisecond
+	systemRouteRetryMaxDelay = 5 * time.Second
+	systemRouteCloseAttempts = 4
+	systemRouteCloseDelay    = 200 * time.Millisecond
+	systemRouteApplyTimeout  = 15 * time.Second
+)
 
 func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TailscaleEndpointOptions) (adapter.Endpoint, error) {
 	stateDirectory := options.StateDirectory
@@ -153,6 +187,9 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	stateDirectory = filemanager.BasePath(ctx, os.ExpandEnv(stateDirectory))
 	stateDirectory, _ = filepath.Abs(stateDirectory)
+	if options.SystemInterface && options.SSHServer != nil && options.SSHServer.Enabled {
+		return nil, E.New("Tailscale `ssh_server` requires the userspace service netstack and cannot be used with `system_interface`")
+	}
 	if options.SSHServer != nil && options.SSHServer.Enabled {
 		err := adapter.CheckSecurityFeature(ctx, "Tailscale `ssh_server`")
 		if err != nil {
@@ -191,7 +228,7 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	taildropDirectory = filemanager.BasePath(ctx, os.ExpandEnv(taildropDirectory))
 	taildropDirectory, _ = filepath.Abs(taildropDirectory)
-	return &Endpoint{
+	tailscaleEndpoint := &Endpoint{
 		Adapter:           endpoint.NewAdapter(C.TypeTailscale, tag, []string{N.NetworkTCP, N.NetworkUDP, N.NetworkICMP}, nil),
 		ctx:               ctx,
 		router:            router,
@@ -248,7 +285,56 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		systemInterfaceName:        options.SystemInterfaceName,
 		systemInterfaceMTU:         options.SystemInterfaceMTU,
 		keyAuth:                    options.AuthKey != "",
-	}, nil
+	}
+	tailscaleEndpoint.exitNodeActive.Store(false)
+	if options.SystemInterface {
+		return tailscaleEndpoint, nil
+	}
+	userspaceEndpoint := &userspaceEndpoint{Endpoint: tailscaleEndpoint}
+	tailscaleEndpoint.userspaceHandler = userspaceEndpoint
+	return userspaceEndpoint, nil
+}
+
+func unwrapEndpoint(raw adapter.Endpoint) (*Endpoint, bool) {
+	switch endpoint := raw.(type) {
+	case *Endpoint:
+		return endpoint, true
+	case *userspaceEndpoint:
+		return endpoint.Endpoint, true
+	default:
+		return nil, false
+	}
+}
+
+func (t *Endpoint) configureDataPlane() {
+	if t.systemInterface {
+		t.server.DataPlaneMode = tsnet.DataPlaneSystem
+	}
+}
+
+func (t *Endpoint) acquireGlobalHooks() error {
+	tailscaleGlobalHookAccess.Lock()
+	defer tailscaleGlobalHookAccess.Unlock()
+	if tailscaleGlobalHookOwner != nil && tailscaleGlobalHookOwner != t {
+		return E.New("only one Tailscale endpoint can be active per sing-box process while Tailscale socket hooks are process-global")
+	}
+	tailscaleGlobalHookOwner = t
+	t.globalHooksAcquired = true
+	return nil
+}
+
+func (t *Endpoint) releaseGlobalHooks() {
+	tailscaleGlobalHookAccess.Lock()
+	defer tailscaleGlobalHookAccess.Unlock()
+	if !t.globalHooksAcquired || tailscaleGlobalHookOwner != t {
+		t.globalHooksAcquired = false
+		return
+	}
+	netmon.RegisterInterfaceGetter(nil)
+	netns.SetControlFunc(nil)
+	netns.SetListenPacketFunc(nil)
+	tailscaleGlobalHookOwner = nil
+	t.globalHooksAcquired = false
 }
 
 func (t *Endpoint) Start(stage adapter.StartStage) error {
@@ -273,7 +359,15 @@ func (t *Endpoint) Start(stage adapter.StartStage) error {
 	return nil
 }
 
-func (t *Endpoint) start() error {
+func (t *Endpoint) start() (retErr error) {
+	if err := t.acquireGlobalHooks(); err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			t.releaseGlobalHooks()
+		}
+	}()
 	if t.platformInterface != nil && t.platformInterface.UsePlatformNetworkInterfaces() {
 		err := t.network.UpdateInterfaces()
 		if err != nil {
@@ -342,9 +436,14 @@ func (t *Endpoint) start() error {
 			_ = systemTun.Close()
 			return err
 		}
-		t.systemTun = systemTun
+		t.systemTunDevice = wgTunDevice
 		t.systemDialer = systemDialer
+		t.systemRouteMu.Lock()
+		t.systemRouteManager = newSystemRouteManager(tunName, mtu, t.server.Dir)
+		t.systemRouteMu.Unlock()
+		t.startSystemRouteUpdater()
 		t.server.Tun = wgTunDevice
+		t.configureDataPlane()
 	}
 	if t.network.AutoRedirectOutputMark() != 0 {
 		netns.SetControlFunc(t.network.AutoRedirectOutputMarkFunc())
@@ -401,79 +500,43 @@ func (t *Endpoint) listenPacket(ctx context.Context, network string, address str
 func (t *Endpoint) postStart() error {
 	err := t.server.Start()
 	if err != nil {
-		if t.systemTun != nil {
-			_ = t.systemTun.Close()
+		// tsnet may already have run its error cleanup (which closes the
+		// WireGuard device). The adapter's Close is once-guarded, so it is
+		// safe to release the ownership retained by start in either case.
+		t.stopSystemRouteUpdater()
+		if routeErr := t.closeSystemRouteManager(); routeErr != nil {
+			err = E.Errors(err, routeErr)
 		}
+		if t.systemTunDevice != nil {
+			_ = t.systemTunDevice.Close()
+			t.systemTunDevice = nil
+		}
+		t.releaseGlobalHooks()
 		return err
-	}
-	t.serverStarted = true
-	if t.fallbackTCPCloser == nil {
-		t.fallbackTCPCloser = t.server.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
-			return func(conn net.Conn) {
-				ctx := log.ContextWithNewID(t.ctx)
-				source := M.SocksaddrFrom(src.Addr(), src.Port())
-				destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
-				t.NewConnectionEx(ctx, conn, source, destination, nil)
-			}, true
-		})
 	}
 	localBackend := t.server.ExportLocalBackend()
 	t.localBackend = localBackend
-	if !version.IsAppleTV() {
+	// Publish the started state only after the backend handle is available. This
+	// keeps callbacks and route reconciliation from observing a half-initialized
+	// server during the startup handoff.
+	t.serverStarted.Store(true)
+	if !version.IsAppleTV() && !t.systemInterface {
 		registerTaildropEndpoint(localBackend, t)
 		go t.taildrop.start()
 	}
 	wgEngine := localBackend.ExportEngine().(wgengine.ExportedUserspaceEngine)
 	wgEngine.SetOnReconfigListener(t.onReconfig)
 	t.wgEngine = wgEngine
+	// Server.Start can complete before the first engine reconfiguration is
+	// delivered to our listener.  Queue one reconciliation after the listener
+	// and server state are ready so an already-configured exit node cannot
+	// miss its initial scoped routes.
+	t.requestSystemRouteUpdate()
 
-	ipStack := t.server.ExportNetstack().ExportIPStack()
-	gErr := ipStack.SetSpoofing(tun.DefaultNIC, true)
-	if gErr != nil {
-		return gonet.TranslateNetstackError(gErr)
-	}
-	gErr = ipStack.SetPromiscuousMode(tun.DefaultNIC, true)
-	if gErr != nil {
-		return gonet.TranslateNetstackError(gErr)
-	}
-	icmpForwarder := tun.NewICMPForwarder(ipStack, t, t.logger)
-	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, icmpForwarder.HandlePacket)
-	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, icmpForwarder.HandlePacket)
-	t.stack = ipStack
-	t.icmpForwarder = icmpForwarder
-	netstack := t.server.ExportNetstack()
-	if netstack != nil {
-		previousTCP := netstack.GetTCPHandlerForFlow
-		netstack.GetTCPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
-			if previousTCP != nil {
-				handler, intercept = previousTCP(src, dst)
-				if handler != nil || !intercept {
-					return handler, intercept
-				}
-			}
-			return func(conn net.Conn) {
-				ctx := log.ContextWithNewID(t.ctx)
-				source := M.SocksaddrFrom(src.Addr(), src.Port())
-				destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
-				t.NewConnectionEx(ctx, conn, source, destination, nil)
-			}, true
-		}
-
-		previousUDP := netstack.GetUDPHandlerForFlow
-		netstack.GetUDPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
-			if previousUDP != nil {
-				handler, intercept = previousUDP(src, dst)
-				if handler != nil || !intercept {
-					return handler, intercept
-				}
-			}
-			return func(conn nettype.ConnPacketConn) {
-				ctx := log.ContextWithNewID(t.ctx)
-				source := M.SocksaddrFrom(src.Addr(), src.Port())
-				destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
-				packetConn := bufio.NewUnbindPacketConnWithAddr(conn, destination)
-				t.NewPacketConnectionEx(ctx, packetConn, source, destination, nil)
-			}, true
+	if !t.systemInterface {
+		err = t.startUserspaceDataPlane()
+		if err != nil {
+			return err
 		}
 	}
 
@@ -508,6 +571,74 @@ func (t *Endpoint) postStart() error {
 	return nil
 }
 
+func (t *Endpoint) startUserspaceDataPlane() error {
+	if t.fallbackTCPCloser == nil {
+		t.fallbackTCPCloser = t.server.RegisterFallbackTCPHandler(func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+			return func(conn net.Conn) {
+				ctx := log.ContextWithNewID(t.ctx)
+				source := M.SocksaddrFrom(src.Addr(), src.Port())
+				destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
+				t.NewConnectionEx(ctx, conn, source, destination, nil)
+			}, true
+		})
+	}
+	netstack := t.server.ExportNetstack()
+	if netstack == nil {
+		return E.New("missing Tailscale userspace netstack")
+	}
+	ipStack := netstack.ExportIPStack()
+	gErr := ipStack.SetSpoofing(tun.DefaultNIC, true)
+	if gErr != nil {
+		return gonet.TranslateNetstackError(gErr)
+	}
+	gErr = ipStack.SetPromiscuousMode(tun.DefaultNIC, true)
+	if gErr != nil {
+		return gonet.TranslateNetstackError(gErr)
+	}
+	if t.userspaceHandler == nil {
+		return E.New("missing Tailscale userspace packet handler")
+	}
+	icmpForwarder := tun.NewICMPForwarder(ipStack, t.userspaceHandler, t.logger)
+	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, icmpForwarder.HandlePacket)
+	ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, icmpForwarder.HandlePacket)
+	t.stack = ipStack
+	t.icmpForwarder = icmpForwarder
+
+	previousTCP := netstack.GetTCPHandlerForFlow
+	netstack.GetTCPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+		if previousTCP != nil {
+			handler, intercept = previousTCP(src, dst)
+			if handler != nil || !intercept {
+				return handler, intercept
+			}
+		}
+		return func(conn net.Conn) {
+			ctx := log.ContextWithNewID(t.ctx)
+			source := M.SocksaddrFrom(src.Addr(), src.Port())
+			destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
+			t.NewConnectionEx(ctx, conn, source, destination, nil)
+		}, true
+	}
+
+	previousUDP := netstack.GetUDPHandlerForFlow
+	netstack.GetUDPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
+		if previousUDP != nil {
+			handler, intercept = previousUDP(src, dst)
+			if handler != nil || !intercept {
+				return handler, intercept
+			}
+		}
+		return func(conn nettype.ConnPacketConn) {
+			ctx := log.ContextWithNewID(t.ctx)
+			source := M.SocksaddrFrom(src.Addr(), src.Port())
+			destination := M.SocksaddrFrom(dst.Addr(), dst.Port())
+			packetConn := bufio.NewUnbindPacketConnWithAddr(conn, destination)
+			t.NewPacketConnectionEx(ctx, packetConn, source, destination, nil)
+		}, true
+	}
+	return nil
+}
+
 func (t *Endpoint) watchState() {
 	localBackend := t.server.ExportLocalBackend()
 	var reportedAuthURL string
@@ -535,6 +666,9 @@ func (t *Endpoint) watchState() {
 				return true
 			}
 			status := localBackend.StatusWithoutPeers()
+			prefs := localBackend.Prefs()
+			t.exitNodeActive.Store(prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid() || prefs.AutoExitNode().IsSet())
+			t.requestSystemRouteUpdate()
 			running = status.BackendState == ipn.Running.String()
 			switch status.BackendState {
 			case ipn.NoState.String(), ipn.NeedsLogin.String():
@@ -615,6 +749,8 @@ func (t *Endpoint) editPrefs(sshEnabled bool) error {
 }
 
 func (t *Endpoint) applyExitNode() error {
+	t.exitNodeUpdateMu.Lock()
+	defer t.exitNodeUpdateMu.Unlock()
 	status, err := common.Must1(t.server.LocalClient()).Status(t.ctx)
 	if err != nil {
 		return err
@@ -631,10 +767,21 @@ func (t *Endpoint) applyExitNode() error {
 		return err
 	}
 	_, err = t.server.ExportLocalBackend().EditPrefs(perfs)
-	return err
+	if err != nil {
+		return err
+	}
+	t.exitNodeActive.Store(t.exitNode != "")
+	ctx, cancel := context.WithTimeout(t.ctx, systemRouteApplyTimeout)
+	defer cancel()
+	if err = t.requestSystemRouteUpdateAndWait(ctx); err != nil {
+		return E.Cause(err, "activate Tailscale system exit route")
+	}
+	return nil
 }
 
 func (t *Endpoint) SetTailscaleExitNode(ctx context.Context, stableID string) error {
+	t.exitNodeUpdateMu.Lock()
+	defer t.exitNodeUpdateMu.Unlock()
 	if !t.started.Load() {
 		return E.New("Tailscale is not ready yet")
 	}
@@ -674,10 +821,16 @@ func (t *Endpoint) SetTailscaleExitNode(ctx context.Context, stableID string) er
 	if err != nil {
 		return E.Cause(err, "update prefs")
 	}
+	t.exitNodeActive.Store(stableID != "")
+	if err = t.requestSystemRouteUpdateAndWait(ctx); err != nil {
+		return E.Cause(err, "reconcile Tailscale system exit route")
+	}
 	return nil
 }
 
 func (t *Endpoint) Logout(ctx context.Context) error {
+	t.exitNodeUpdateMu.Lock()
+	defer t.exitNodeUpdateMu.Unlock()
 	if !t.started.Load() {
 		return E.New("Tailscale is not ready yet")
 	}
@@ -706,12 +859,21 @@ func (t *Endpoint) Logout(ctx context.Context) error {
 	if err != nil {
 		return E.Cause(err, "start interactive login")
 	}
+	t.exitNodeActive.Store(false)
+	if err = t.requestSystemRouteUpdateAndWait(ctx); err != nil {
+		return E.Cause(err, "remove Tailscale system exit route")
+	}
 	return nil
 }
 
 func (t *Endpoint) Close() error {
 	var err error
 	t.started.Store(false)
+	serverWasStarted := t.serverStarted.Swap(false)
+	t.stopSystemRouteUpdater()
+	if routeErr := t.closeSystemRouteManagerWithRetry(); routeErr != nil {
+		err = routeErr
+	}
 	if t.localBackend != nil {
 		unregisterTaildropEndpoint(t.localBackend)
 		t.localBackend = nil
@@ -723,20 +885,19 @@ func (t *Endpoint) Close() error {
 	}
 	common.Close(common.PtrOrNil(t.sshServerInstance))
 	t.sshServerInstance = nil
-	if t.serverStarted {
-		err = common.Close(common.PtrOrNil(t.server))
-		t.serverStarted = false
+	if serverWasStarted {
+		err = E.Errors(err, common.Close(common.PtrOrNil(t.server)))
 	}
-	netmon.RegisterInterfaceGetter(nil)
-	netns.SetControlFunc(nil)
-	netns.SetListenPacketFunc(nil)
+	t.releaseGlobalHooks()
 	if t.fallbackTCPCloser != nil {
 		t.fallbackTCPCloser()
 		t.fallbackTCPCloser = nil
 	}
-	if t.systemTun != nil {
-		t.systemTun.Close()
-		t.systemTun = nil
+	if t.systemTunDevice != nil {
+		// Server.Close normally closes this first through wgengine. The
+		// adapter owns the raw TUN and makes this second cleanup harmless.
+		_ = t.systemTunDevice.Close()
+		t.systemTunDevice = nil
 	}
 	return err
 }
@@ -749,6 +910,7 @@ func (t *Endpoint) InterfaceUpdated(ctx context.Context) {
 	if loaded && netMon != nil {
 		netMon.InjectEvent()
 	}
+	t.requestSystemRouteUpdate()
 }
 
 func (t *Endpoint) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
@@ -973,9 +1135,17 @@ func (t *Endpoint) Server() *tsnet.Server {
 }
 
 func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *tsDNS.Config) {
+	// Route readiness depends on the WireGuard/TUN address state, not on DNS.
+	// Queue reconciliation before the config guard so an address-only reconfig
+	// can wake a pending exit-node activation.
+	t.requestSystemRouteUpdate()
 	if cfg == nil || dnsCfg == nil {
 		return
 	}
+	// The Tailscale fork intentionally removes exit-node /0 routes from the
+	// OS router configuration. Reconcile the scoped defaults independently so
+	// sockets bound to this system interface still reach the selected exit
+	// node without hijacking Tailscale's control-plane sockets.
 	// The engine invokes the listener on every Reconfig call, including
 	// unchanged ones: SSH policy lives only in the netmap, outside the
 	// three configs, so the SSH hook must run before the change check.
@@ -1009,6 +1179,269 @@ func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 	if t.onReconfigHook != nil {
 		t.onReconfigHook(cfg, routerCfg, dnsCfg)
 	}
+}
+
+func (t *Endpoint) updateSystemRoutes() {
+	_, _ = t.updateSystemRoutesResult()
+}
+
+func (t *Endpoint) updateSystemRoutesResult() (uint64, error) {
+	t.systemRouteMu.Lock()
+	generation := t.systemRouteGeneration
+	manager := t.systemRouteManager
+	t.systemRouteMu.Unlock()
+	if manager == nil || t.server == nil || !t.serverStarted.Load() {
+		return generation, nil
+	}
+	ip4, ip6 := t.server.TailscaleIPs()
+	enabled := t.exitNodeActive.Load()
+	if systemRouteRequiresAddress && enabled && !validSystemRouteAddress(ip4) && !validSystemRouteAddress(ip6) {
+		if err := manager.Update(enabled, ip4, ip6); err != nil {
+			return generation, err
+		}
+		return generation, errSystemRouteAddressPending
+	}
+	if err := manager.Update(enabled, ip4, ip6); err != nil {
+		if isTransientSystemRouteError(err) {
+			t.logger.Debug("update Tailscale system exit routes: ", err)
+		} else {
+			t.logger.Warn("update Tailscale system exit routes: ", err)
+		}
+		return generation, err
+	}
+	return generation, nil
+}
+
+func validSystemRouteAddress(address netip.Addr) bool {
+	return address.IsValid() && !address.IsUnspecified()
+}
+
+// startSystemRouteUpdater moves route socket I/O off Tailscale's reconfigure
+// callback. The callback runs while the engine's internal wireguard lock is
+// held; a stalled routing socket must not block control-plane convergence.
+func (t *Endpoint) startSystemRouteUpdater() {
+	t.systemRouteMu.Lock()
+	if t.systemRouteUpdate != nil || t.systemRouteStopping {
+		t.systemRouteMu.Unlock()
+		return
+	}
+	updates := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	t.systemRouteUpdate = updates
+	t.systemRouteStop = stop
+	if t.systemRouteWaiters == nil {
+		t.systemRouteWaiters = make(map[uint64]chan error)
+	}
+	t.systemRouteWG.Add(1)
+	t.systemRouteMu.Unlock()
+	go func() {
+		defer t.systemRouteWG.Done()
+		runSystemRouteUpdater(
+			updates,
+			stop,
+			t.updateSystemRoutesResult,
+			t.completeSystemRouteGeneration,
+			systemRouteRetryMinDelay,
+			systemRouteRetryMaxDelay,
+		)
+	}()
+}
+
+func runSystemRouteUpdater(
+	updates <-chan struct{},
+	stop <-chan struct{},
+	update func() (uint64, error),
+	complete func(uint64, error),
+	retryMinDelay time.Duration,
+	retryMaxDelay time.Duration,
+) {
+	if retryMinDelay <= 0 {
+		retryMinDelay = time.Millisecond
+	}
+	if retryMaxDelay < retryMinDelay {
+		retryMaxDelay = retryMinDelay
+	}
+	for {
+		select {
+		case _, loaded := <-updates:
+			if !loaded {
+				return
+			}
+		case <-stop:
+			return
+		}
+		retryDelay := retryMinDelay
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			generation, err := update()
+			if err == nil {
+				complete(generation, nil)
+				break
+			}
+			if !isTransientSystemRouteError(err) {
+				complete(generation, err)
+				break
+			}
+			timer := time.NewTimer(retryDelay)
+			select {
+			case _, loaded := <-updates:
+				stopSystemRouteRetryTimer(timer)
+				if !loaded {
+					return
+				}
+				retryDelay = retryMinDelay
+				continue
+			case <-stop:
+				stopSystemRouteRetryTimer(timer)
+				return
+			case <-timer.C:
+				if retryDelay < retryMaxDelay {
+					retryDelay *= 2
+					if retryDelay > retryMaxDelay {
+						retryDelay = retryMaxDelay
+					}
+				}
+			}
+		}
+	}
+}
+
+func stopSystemRouteRetryTimer(timer *time.Timer) {
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
+}
+
+func (t *Endpoint) queueSystemRouteUpdate(waiter chan error) (uint64, bool) {
+	t.systemRouteMu.Lock()
+	updates := t.systemRouteUpdate
+	if updates == nil || !t.serverStarted.Load() {
+		t.systemRouteMu.Unlock()
+		return 0, false
+	}
+	t.systemRouteGeneration++
+	generation := t.systemRouteGeneration
+	if waiter != nil {
+		if t.systemRouteWaiters == nil {
+			t.systemRouteWaiters = make(map[uint64]chan error)
+		}
+		t.systemRouteWaiters[generation] = waiter
+	}
+	t.systemRouteMu.Unlock()
+	select {
+	case updates <- struct{}{}:
+	default:
+	}
+	return generation, true
+}
+
+func (t *Endpoint) requestSystemRouteUpdate() {
+	_, _ = t.queueSystemRouteUpdate(nil)
+}
+
+func (t *Endpoint) requestSystemRouteUpdateAndWait(ctx context.Context) error {
+	if !t.systemInterface {
+		return nil
+	}
+	waiter := make(chan error, 1)
+	generation, queued := t.queueSystemRouteUpdate(waiter)
+	if !queued {
+		return nil
+	}
+	select {
+	case err := <-waiter:
+		return err
+	case <-ctx.Done():
+		t.systemRouteMu.Lock()
+		if current, loaded := t.systemRouteWaiters[generation]; loaded && current == waiter {
+			delete(t.systemRouteWaiters, generation)
+		}
+		t.systemRouteMu.Unlock()
+		return ctx.Err()
+	}
+}
+
+func (t *Endpoint) completeSystemRouteGeneration(generation uint64, err error) {
+	t.systemRouteMu.Lock()
+	for waiterGeneration, waiter := range t.systemRouteWaiters {
+		if waiterGeneration > generation {
+			continue
+		}
+		delete(t.systemRouteWaiters, waiterGeneration)
+		waiter <- err
+	}
+	t.systemRouteMu.Unlock()
+}
+
+func (t *Endpoint) failSystemRouteWaiters(err error) {
+	t.systemRouteMu.Lock()
+	for generation, waiter := range t.systemRouteWaiters {
+		delete(t.systemRouteWaiters, generation)
+		waiter <- err
+	}
+	t.systemRouteMu.Unlock()
+}
+
+func (t *Endpoint) stopSystemRouteUpdater() {
+	t.systemRouteMu.Lock()
+	stop := t.systemRouteStop
+	if stop == nil || t.systemRouteStopping {
+		t.systemRouteMu.Unlock()
+		return
+	}
+	t.systemRouteStopping = true
+	close(stop)
+	t.systemRouteMu.Unlock()
+	t.systemRouteWG.Wait()
+	t.systemRouteMu.Lock()
+	if t.systemRouteStop == stop {
+		t.systemRouteStop = nil
+		t.systemRouteUpdate = nil
+	}
+	t.systemRouteStopping = false
+	t.systemRouteMu.Unlock()
+	t.failSystemRouteWaiters(net.ErrClosed)
+}
+
+func (t *Endpoint) closeSystemRouteManager() error {
+	t.systemRouteMu.Lock()
+	manager := t.systemRouteManager
+	t.systemRouteMu.Unlock()
+	if manager == nil {
+		return nil
+	}
+	err := manager.Close()
+	if err == nil {
+		t.systemRouteMu.Lock()
+		if t.systemRouteManager == manager {
+			t.systemRouteManager = nil
+		}
+		t.systemRouteMu.Unlock()
+	}
+	return err
+}
+
+func (t *Endpoint) closeSystemRouteManagerWithRetry() error {
+	var lastErr error
+	for attempt := 0; attempt < systemRouteCloseAttempts; attempt++ {
+		lastErr = t.closeSystemRouteManager()
+		if lastErr == nil || !isTransientSystemRouteError(lastErr) {
+			return lastErr
+		}
+		if attempt+1 == systemRouteCloseAttempts {
+			break
+		}
+		time.Sleep(systemRouteCloseDelay)
+	}
+	return lastErr
 }
 
 func addressFromAddr(destination netip.Addr) tcpip.Address {

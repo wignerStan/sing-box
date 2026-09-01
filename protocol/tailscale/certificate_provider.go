@@ -43,7 +43,7 @@ func NewCertificateProvider(ctx context.Context, _ log.ContextLogger, tag string
 	if !loaded {
 		return nil, E.New("endpoint not found: ", options.Endpoint)
 	}
-	endpoint, isTailscale := rawEndpoint.(*Endpoint)
+	endpoint, isTailscale := unwrapEndpoint(rawEndpoint)
 	if !isTailscale {
 		return nil, E.New("endpoint is not Tailscale: ", options.Endpoint)
 	}
