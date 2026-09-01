@@ -163,8 +163,11 @@ the local Tailscale address as the interface address and are used only by
 sockets bound to `system_interface`; Tailscale control-plane sockets remain
 on the normal network interface. A family is omitted until Tailscale has an
 address for it, so IPv4-only networks continue to work. During a transient
-link handover, an already-installed family route is retained until Tailscale
-publishes a new address or the exit node is disabled.
+link handover, an already-installed family route is retained for a bounded
+grace period, but it is removed immediately if the system TUN interface index
+changes. Exit-node changes do not report success until the first definitive
+route reconciliation completes; transient address/interface races are retried
+with bounded exponential backoff, while permanent errors are returned.
 
 The scoped routes carry a locked MTU metric matching the TUN. This is required
 on Darwin because an unqualified route cache entry can otherwise inherit the
@@ -179,6 +182,12 @@ and may still use the physical route's MSS.
 When migrating from an external scoped-route supervisor, stop that supervisor
 before enabling this mode so two route owners cannot race over the same
 interface. Keep the supervisor disabled after the endpoint has taken ownership.
+
+Only one Tailscale endpoint can be active in a sing-box process. The Tailscale
+`netns` and network-monitor hooks used by the embedded server are process-global;
+sing-box rejects a second endpoint rather than allowing one endpoint to replace
+or clear another endpoint's hooks. Separate processes are also expected to use
+different system interfaces and must not manage the same scoped routes.
 
 #### system_interface_name
 

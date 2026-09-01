@@ -22,7 +22,11 @@ import (
 
 var systemRouteMessageSeq atomic.Int32
 
-const scopedRouteReplyTimeout = time.Second
+const (
+	scopedRouteReplyTimeout    = time.Second
+	systemRouteHandoverGrace   = 5 * time.Second
+	systemRouteRequiresAddress = true
+)
 
 type systemRouteFamily uint8
 
@@ -42,23 +46,23 @@ type darwinSystemRouteManager struct {
 	name string
 	mtu  uint32
 
-	mu      sync.Mutex
-	routes  map[systemRouteFamily]systemRoute
-	closing bool
-	closed  bool
-	indexes func() (int, int, error)
-	routeOp func(int, systemRoute) error
+	mu           sync.Mutex
+	routes       map[systemRouteFamily]systemRoute
+	missingSince map[systemRouteFamily]time.Time
+	closing      bool
+	closed       bool
+	indexes      func() (int, int, error)
+	routeOp      func(int, systemRoute) error
+	now          func() time.Time
 }
 
-func newSystemRouteManager(name string, mtuValues ...uint32) systemRouteManager {
-	var mtu uint32
-	if len(mtuValues) > 0 {
-		mtu = mtuValues[0]
-	}
+func newSystemRouteManager(name string, mtu uint32, _ string) systemRouteManager {
 	manager := &darwinSystemRouteManager{
-		name:   name,
-		mtu:    mtu,
-		routes: make(map[systemRouteFamily]systemRoute),
+		name:         name,
+		mtu:          mtu,
+		routes:       make(map[systemRouteFamily]systemRoute),
+		missingSince: make(map[systemRouteFamily]time.Time),
+		now:          time.Now,
 	}
 	manager.indexes = manager.interfaceIndexes
 	manager.routeOp = executeScopedRoute
@@ -82,11 +86,17 @@ func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) err
 	if r.routes == nil {
 		r.routes = make(map[systemRouteFamily]systemRoute)
 	}
+	if r.missingSince == nil {
+		r.missingSince = make(map[systemRouteFamily]time.Time)
+	}
+	if r.now == nil {
+		r.now = time.Now
+	}
 
 	wantIPv4 := enabled && ip4.Is4() && !ip4.IsUnspecified()
 	wantIPv6 := enabled && ip6.Is6() && !ip6.Is4In6() && !ip6.IsUnspecified()
 	var if4, if6 int
-	if wantIPv4 || wantIPv6 {
+	if enabled && (wantIPv4 || wantIPv6 || len(r.routes) > 0) {
 		indexes := r.indexes
 		if indexes == nil {
 			indexes = r.interfaceIndexes
@@ -109,48 +119,125 @@ func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) err
 	if wantIPv6 {
 		want[systemRouteIPv6] = systemRoute{family: systemRouteIPv6, gateway: ip6.Unmap(), index: if6, mtu: r.mtu}
 	}
+	indexes := map[systemRouteFamily]int{
+		systemRouteIPv4: if4,
+		systemRouteIPv6: if6,
+	}
 
 	var updateErr error
 	for _, family := range []systemRouteFamily{systemRouteIPv4, systemRouteIPv6} {
 		old, hadOld := r.routes[family]
 		newRoute, wantsNew := want[family]
-		if enabled && hadOld && !wantsNew {
-			// Tailscale can briefly publish an incomplete address snapshot while
-			// a link or peer transition is converging.  Keep an already usable
-			// family-scoped route during that handover; deleting it here creates
-			// a needless traffic gap and can turn a transient IPv6 loss into a
-			// full endpoint outage.  An explicit disable still removes it below.
-			continue
-		}
-		if hadOld && (!wantsNew || old != newRoute) {
+
+		if !enabled {
+			delete(r.missingSince, family)
+			if !hadOld {
+				continue
+			}
 			if err := r.apply(unix.RTM_DELETE, old); err != nil && !isRouteGone(err) {
 				updateErr = errors.Join(updateErr, scopedRouteError(family, "delete", err))
 				continue
 			}
 			delete(r.routes, family)
-			hadOld = false
+			continue
 		}
-		if wantsNew && hadOld {
-			// Re-assert the route even when our desired value did not change.
-			// Tailscale, configd, and other route owners can replace an
-			// interface-scoped entry without changing the address snapshot we
-			// receive.  RTM_CHANGE both detects that race and restores the
-			// locked utun MTU metric before a new socket inherits a stale MSS.
+
+		if !wantsNew {
+			if !hadOld {
+				delete(r.missingSince, family)
+				continue
+			}
+			// Never preserve a route across a utun replacement. A stale scope is
+			// worse than a brief missing family because it can blackhole traffic.
+			currentIndex := indexes[family]
+			if currentIndex > 0 && old.index != currentIndex {
+				if err := r.apply(unix.RTM_DELETE, old); err != nil && !isRouteGone(err) {
+					updateErr = errors.Join(updateErr, scopedRouteError(family, "delete stale", err))
+					continue
+				}
+				delete(r.routes, family)
+				delete(r.missingSince, family)
+				continue
+			}
+			missingSince, loaded := r.missingSince[family]
+			if !loaded {
+				missingSince = r.now()
+				r.missingSince[family] = missingSince
+			}
+			if r.now().Sub(missingSince) < systemRouteHandoverGrace {
+				continue
+			}
+			if err := r.apply(unix.RTM_DELETE, old); err != nil && !isRouteGone(err) {
+				updateErr = errors.Join(updateErr, scopedRouteError(family, "delete expired", err))
+				continue
+			}
+			delete(r.routes, family)
+			delete(r.missingSince, family)
+			continue
+		}
+
+		delete(r.missingSince, family)
+		if !hadOld {
+			if err := r.install(newRoute); err != nil {
+				updateErr = errors.Join(updateErr, scopedRouteError(family, "install", err))
+				continue
+			}
+			r.routes[family] = newRoute
+			continue
+		}
+
+		if old == newRoute {
+			// Re-assert the route because configd or another route writer may
+			// have removed or altered the kernel entry without changing our
+			// desired state.
 			if err := r.apply(unix.RTM_CHANGE, newRoute); err != nil {
 				if !isRouteGone(err) {
 					updateErr = errors.Join(updateErr, scopedRouteError(family, "change", err))
 					continue
 				}
-				delete(r.routes, family)
-				hadOld = false
+				if err = r.install(newRoute); err != nil {
+					updateErr = errors.Join(updateErr, scopedRouteError(family, "repair", err))
+					continue
+				}
 			}
-		}
-		if !wantsNew || hadOld {
+			r.routes[family] = newRoute
 			continue
 		}
-		err := r.install(newRoute)
-		if err != nil {
-			updateErr = errors.Join(updateErr, scopedRouteError(family, "install", err))
+
+		if old.index == newRoute.index {
+			// A same-scope address/MTU transition can be changed in place, which
+			// avoids the delete-first outage of the previous implementation.
+			if err := r.apply(unix.RTM_CHANGE, newRoute); err != nil {
+				if !isRouteGone(err) {
+					updateErr = errors.Join(updateErr, scopedRouteError(family, "change", err))
+					continue
+				}
+				if err = r.install(newRoute); err != nil {
+					updateErr = errors.Join(updateErr, scopedRouteError(family, "install replacement", err))
+					continue
+				}
+			}
+			r.routes[family] = newRoute
+			continue
+		}
+
+		// A scope change cannot be performed atomically with RTM_CHANGE. Add the
+		// new working route first, then remove the old route. If old-route cleanup
+		// fails, roll back the new entry so bookkeeping and kernel state continue
+		// to agree on the last known working route.
+		if err := r.install(newRoute); err != nil {
+			updateErr = errors.Join(updateErr, scopedRouteError(family, "install replacement", err))
+			continue
+		}
+		if err := r.apply(unix.RTM_DELETE, old); err != nil && !isRouteGone(err) {
+			rollbackErr := r.apply(unix.RTM_DELETE, newRoute)
+			if rollbackErr != nil && !isRouteGone(rollbackErr) {
+				updateErr = errors.Join(updateErr,
+					scopedRouteError(family, "delete old", err),
+					scopedRouteError(family, "rollback replacement", rollbackErr))
+			} else {
+				updateErr = errors.Join(updateErr, scopedRouteError(family, "delete old", err))
+			}
 			continue
 		}
 		r.routes[family] = newRoute

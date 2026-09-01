@@ -3,9 +3,11 @@
 package tailscale
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -75,6 +77,50 @@ func TestSystemInterfaceSelectsPureSystemDataPlane(t *testing.T) {
 	}
 }
 
+func TestGlobalHookOwnershipRejectsSecondEndpoint(t *testing.T) {
+	first := &Endpoint{}
+	second := &Endpoint{}
+	if err := first.acquireGlobalHooks(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(first.releaseGlobalHooks)
+	if err := second.acquireGlobalHooks(); err == nil {
+		second.releaseGlobalHooks()
+		t.Fatal("second endpoint unexpectedly acquired process-global Tailscale hooks")
+	}
+	first.releaseGlobalHooks()
+	if err := second.acquireGlobalHooks(); err != nil {
+		t.Fatalf("second endpoint could not acquire hooks after release: %v", err)
+	}
+	second.releaseGlobalHooks()
+}
+
+func TestSystemRouteReadinessWaiter(t *testing.T) {
+	endpoint := &Endpoint{systemInterface: true, systemRouteUpdate: make(chan struct{}, 1)}
+	endpoint.serverStarted.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		done <- endpoint.requestSystemRouteUpdateAndWait(context.Background())
+	}()
+	select {
+	case <-endpoint.systemRouteUpdate:
+	case <-time.After(time.Second):
+		t.Fatal("route update was not queued")
+	}
+	endpoint.systemRouteMu.Lock()
+	generation := endpoint.systemRouteGeneration
+	endpoint.systemRouteMu.Unlock()
+	endpoint.completeSystemRouteGeneration(generation, nil)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("route readiness waiter was not completed")
+	}
+}
+
 func TestCloseSystemRouteManagerRetainsFailedCleanup(t *testing.T) {
 	sentinel := errors.New("cleanup failed")
 	manager := &endpointTestRouteManager{closeErr: sentinel}
@@ -122,16 +168,15 @@ func TestRunSystemRouteUpdaterRetriesAndWakesOnUpdate(t *testing.T) {
 	attempts := make(chan int, 3)
 	done := make(chan struct{})
 	var attempt int
-	sentinel := errors.New("retry")
 	go func() {
-		runSystemRouteUpdater(updates, stop, func() error {
+		runSystemRouteUpdater(updates, stop, func() (uint64, error) {
 			attempt++
 			attempts <- attempt
 			if attempt < 3 {
-				return sentinel
+				return uint64(attempt), syscall.ENXIO
 			}
-			return nil
-		}, time.Hour)
+			return uint64(attempt), nil
+		}, func(uint64, error) {}, time.Hour, time.Hour)
 		close(done)
 	}()
 	updates <- struct{}{}
@@ -147,8 +192,6 @@ func TestRunSystemRouteUpdaterRetriesAndWakesOnUpdate(t *testing.T) {
 		}
 	}
 	waitAttempt(1)
-	// A fresh event must interrupt the long retry timer rather than waiting
-	// for the periodic backoff.
 	updates <- struct{}{}
 	waitAttempt(2)
 	updates <- struct{}{}
@@ -161,6 +204,35 @@ func TestRunSystemRouteUpdaterRetriesAndWakesOnUpdate(t *testing.T) {
 	}
 }
 
+func TestRunSystemRouteUpdaterStopsOnPermanentError(t *testing.T) {
+	updates := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	completed := make(chan error, 1)
+	attempts := 0
+	go runSystemRouteUpdater(updates, stop, func() (uint64, error) {
+		attempts++
+		return 7, syscall.EPERM
+	}, func(generation uint64, err error) {
+		if generation != 7 {
+			t.Errorf("generation = %d, want 7", generation)
+		}
+		completed <- err
+	}, time.Millisecond, 10*time.Millisecond)
+	updates <- struct{}{}
+	select {
+	case err := <-completed:
+		if !errors.Is(err, syscall.EPERM) {
+			t.Fatalf("completion error = %v, want EPERM", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("permanent route error was not reported")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	close(stop)
+}
+
 func TestRunSystemRouteUpdaterStopsDuringRetry(t *testing.T) {
 	updates := make(chan struct{}, 1)
 	stop := make(chan struct{})
@@ -170,10 +242,10 @@ func TestRunSystemRouteUpdaterStopsDuringRetry(t *testing.T) {
 	entered := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		runSystemRouteUpdater(updates, stop, func() error {
+		runSystemRouteUpdater(updates, stop, func() (uint64, error) {
 			close(entered)
-			return errors.New("retry")
-		}, time.Hour)
+			return 1, syscall.ENXIO
+		}, func(uint64, error) {}, time.Hour, time.Hour)
 		close(done)
 	}()
 	updates <- struct{}{}

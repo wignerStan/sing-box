@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -60,17 +61,19 @@ type fakeSystemRouteCall struct {
 
 func newFakeSystemRouteManager(indexes func() (int, int, error), op func(int, systemRoute) error) *darwinSystemRouteManager {
 	manager := &darwinSystemRouteManager{
-		name:    "utun-test",
-		mtu:     1280,
-		routes:  make(map[systemRouteFamily]systemRoute),
-		indexes: indexes,
-		routeOp: op,
+		name:         "utun-test",
+		mtu:          1280,
+		routes:       make(map[systemRouteFamily]systemRoute),
+		missingSince: make(map[systemRouteFamily]time.Time),
+		indexes:      indexes,
+		routeOp:      op,
+		now:          time.Now,
 	}
 	return manager
 }
 
 func TestNewSystemRouteManagerInitializesProductionDependencies(t *testing.T) {
-	manager, ok := newSystemRouteManager("utun-test", 1280).(*darwinSystemRouteManager)
+	manager, ok := newSystemRouteManager("utun-test", 1280, t.TempDir()).(*darwinSystemRouteManager)
 	if !ok {
 		t.Fatalf("manager type = %T, want *darwinSystemRouteManager", manager)
 	}
@@ -79,10 +82,6 @@ func TestNewSystemRouteManagerInitializesProductionDependencies(t *testing.T) {
 	}
 	if manager.routes == nil || manager.indexes == nil || manager.routeOp == nil {
 		t.Fatalf("manager dependencies are incomplete: routes=%v indexes=%v routeOp=%v", manager.routes != nil, manager.indexes != nil, manager.routeOp != nil)
-	}
-	legacy, ok := newSystemRouteManager("utun-legacy").(*darwinSystemRouteManager)
-	if !ok || legacy.mtu != 0 {
-		t.Fatalf("legacy constructor = %#v, want zero MTU Darwin manager", legacy)
 	}
 }
 
@@ -171,14 +170,147 @@ func TestSystemRouteManagerRotatesAddressInterfaceAndMTU(t *testing.T) {
 	}
 	want := []fakeSystemRouteCall{
 		{typ: unix.RTM_ADD, route: systemRoute{family: systemRouteIPv4, gateway: oldIP, index: 17, mtu: 1280}},
-		{typ: unix.RTM_DELETE, route: systemRoute{family: systemRouteIPv4, gateway: oldIP, index: 17, mtu: 1280}},
 		{typ: unix.RTM_ADD, route: systemRoute{family: systemRouteIPv4, gateway: newIP, index: 19, mtu: 1360}},
+		{typ: unix.RTM_DELETE, route: systemRoute{family: systemRouteIPv4, gateway: oldIP, index: 17, mtu: 1280}},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
 	}
-	if got := manager.routes[systemRouteIPv4]; got != want[2].route {
-		t.Fatalf("current route = %#v, want %#v", got, want[2].route)
+	if got := manager.routes[systemRouteIPv4]; got != want[1].route {
+		t.Fatalf("current route = %#v, want %#v", got, want[1].route)
+	}
+}
+
+func TestSystemRouteManagerChangesAddressAndMTUInPlace(t *testing.T) {
+	oldIP := netip.MustParseAddr("100.71.1.1")
+	newIP := netip.MustParseAddr("100.72.2.2")
+	var calls []fakeSystemRouteCall
+	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
+		return nil
+	})
+	if err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	manager.mtu = 1360
+	if err := manager.Update(true, newIP, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []fakeSystemRouteCall{
+		{typ: unix.RTM_ADD, route: systemRoute{family: systemRouteIPv4, gateway: oldIP, index: 17, mtu: 1280}},
+		{typ: unix.RTM_CHANGE, route: systemRoute{family: systemRouteIPv4, gateway: newIP, index: 17, mtu: 1360}},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestSystemRouteManagerPreservesOldRouteWhenReplacementInstallFails(t *testing.T) {
+	oldIP := netip.MustParseAddr("100.71.1.1")
+	newIP := netip.MustParseAddr("100.72.2.2")
+	index := 17
+	sentinel := errors.New("install replacement failed")
+	var calls []fakeSystemRouteCall
+	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
+		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
+		if typ == unix.RTM_ADD && route.index == 19 {
+			return sentinel
+		}
+		return nil
+	})
+	if err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	oldRoute := manager.routes[systemRouteIPv4]
+	index = 19
+	if err := manager.Update(true, newIP, netip.Addr{}); !errors.Is(err, sentinel) {
+		t.Fatalf("replacement error = %v, want %v", err, sentinel)
+	}
+	if got := manager.routes[systemRouteIPv4]; got != oldRoute {
+		t.Fatalf("working route changed after failed replacement: got %#v, want %#v", got, oldRoute)
+	}
+	for _, call := range calls[1:] {
+		if call.typ == unix.RTM_DELETE && call.route == oldRoute {
+			t.Fatal("old working route was deleted after replacement installation failed")
+		}
+	}
+}
+
+func TestSystemRouteManagerRollsBackReplacementWhenOldDeleteFails(t *testing.T) {
+	oldIP := netip.MustParseAddr("100.71.1.1")
+	newIP := netip.MustParseAddr("100.72.2.2")
+	index := 17
+	sentinel := errors.New("delete old failed")
+	var oldRoute systemRoute
+	var newRoute systemRoute
+	var calls []fakeSystemRouteCall
+	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
+		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
+		if typ == unix.RTM_DELETE && route == oldRoute && route.index == 17 {
+			return sentinel
+		}
+		return nil
+	})
+	if err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	oldRoute = manager.routes[systemRouteIPv4]
+	index = 19
+	newRoute = systemRoute{family: systemRouteIPv4, gateway: newIP, index: 19, mtu: 1280}
+	if err := manager.Update(true, newIP, netip.Addr{}); !errors.Is(err, sentinel) {
+		t.Fatalf("replacement error = %v, want %v", err, sentinel)
+	}
+	if got := manager.routes[systemRouteIPv4]; got != oldRoute {
+		t.Fatalf("bookkeeping after rollback = %#v, want old route %#v", got, oldRoute)
+	}
+	wantTail := []fakeSystemRouteCall{
+		{typ: unix.RTM_ADD, route: newRoute},
+		{typ: unix.RTM_DELETE, route: oldRoute},
+		{typ: unix.RTM_DELETE, route: newRoute},
+	}
+	if len(calls) < len(wantTail) || !reflect.DeepEqual(calls[len(calls)-len(wantTail):], wantTail) {
+		t.Fatalf("replacement tail = %#v, want %#v", calls, wantTail)
+	}
+}
+
+func TestSystemRouteManagerExpiresMissingFamilyAfterGrace(t *testing.T) {
+	ip4 := netip.MustParseAddr("100.71.1.1")
+	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	now := time.Unix(100, 0)
+	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error { return nil })
+	manager.now = func() time.Time { return now }
+	if err := manager.Update(true, ip4, ip6); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, loaded := manager.routes[systemRouteIPv6]; !loaded {
+		t.Fatal("IPv6 route was removed before the handover grace expired")
+	}
+	now = now.Add(systemRouteHandoverGrace + time.Millisecond)
+	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, loaded := manager.routes[systemRouteIPv6]; loaded {
+		t.Fatal("stale IPv6 route survived past the handover grace")
+	}
+}
+
+func TestSystemRouteManagerDropsMissingFamilyOnInterfaceReplacement(t *testing.T) {
+	ip4 := netip.MustParseAddr("100.71.1.1")
+	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	index := 17
+	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(int, systemRoute) error { return nil })
+	if err := manager.Update(true, ip4, ip6); err != nil {
+		t.Fatal(err)
+	}
+	index = 19
+	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, loaded := manager.routes[systemRouteIPv6]; loaded {
+		t.Fatal("IPv6 route retained the stale utun scope after interface replacement")
 	}
 }
 
@@ -454,11 +586,11 @@ func TestSystemRouteManagerNoAddressesDoesNotNeedInterface(t *testing.T) {
 		index:   17,
 		mtu:     1280,
 	}
-	if err := manager.Update(true, netip.Addr{}, netip.Addr{}); err != nil {
-		t.Fatal(err)
+	if err := manager.Update(true, netip.Addr{}, netip.Addr{}); !errors.Is(err, unix.ENXIO) {
+		t.Fatalf("handover without a current interface error = %v, want ENXIO", err)
 	}
 	if _, ok := manager.routes[systemRouteIPv4]; !ok {
-		t.Fatal("existing route was discarded during an address handover")
+		t.Fatal("existing route bookkeeping was discarded after failed interface validation")
 	}
 }
 
