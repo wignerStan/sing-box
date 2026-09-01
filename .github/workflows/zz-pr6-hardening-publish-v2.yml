@@ -55,6 +55,7 @@ jobs:
               raise SystemExit(f'patch sha256 mismatch: {digest} != {expected}')
           target.write_bytes(data)
           PY
+          git config core.autocrlf false
           git reset --hard "$BASE_SHA"
           git clean -fdx
           git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
@@ -114,6 +115,7 @@ jobs:
               raise SystemExit(f'patch sha256 mismatch: {digest} != {expected}')
           target.write_bytes(data)
           PY
+          git config core.autocrlf false
           git reset --hard "$BASE_SHA"
           git clean -fdx
           git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
@@ -162,6 +164,7 @@ jobs:
               raise SystemExit(f'patch sha256 mismatch: {digest} != {expected}')
           target.write_bytes(data)
           PY
+          git config core.autocrlf false
           git reset --hard "$BASE_SHA"
           git clean -fdx
           git apply --index --whitespace=error-all "$RUNNER_TEMP/hardening.patch"
