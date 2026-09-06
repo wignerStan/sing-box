@@ -64,6 +64,7 @@ func newFakeSystemRouteManager(indexes func() (int, int, error), op func(int, sy
 		name:         "utun-test",
 		mtu:          1280,
 		routes:       make(map[systemRouteFamily]systemRoute),
+		ownedRoutes:  make(map[systemRoute]struct{}),
 		missingSince: make(map[systemRouteFamily]time.Time),
 		indexes:      indexes,
 		routeOp:      op,
@@ -94,7 +95,7 @@ func TestSystemRouteManagerReconcilesFamilies(t *testing.T) {
 		return nil
 	})
 
-	if err := manager.Update(true, ip4, ip6); err != nil {
+	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
 	}
 	wantRoutes := map[systemRouteFamily]systemRoute{
@@ -112,7 +113,7 @@ func TestSystemRouteManagerReconcilesFamilies(t *testing.T) {
 		t.Fatalf("calls after enable = %#v, want %#v", calls, wantCalls)
 	}
 
-	if err := manager.Update(true, ip4, ip6); err != nil {
+	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
 	}
 	wantCalls = append(wantCalls,
@@ -123,7 +124,7 @@ func TestSystemRouteManagerReconcilesFamilies(t *testing.T) {
 		t.Fatalf("idempotent update calls = %#v, want %#v", calls, wantCalls)
 	}
 
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	wantCalls = append(wantCalls,
@@ -136,7 +137,7 @@ func TestSystemRouteManagerReconcilesFamilies(t *testing.T) {
 		t.Fatalf("routes during IPv6 handover = %#v, want %#v", manager.routes, wantRoutes)
 	}
 
-	if err := manager.Update(false, ip4, ip6); err != nil {
+	if _, err := manager.Update(false, ip4, ip6); err != nil {
 		t.Fatal(err)
 	}
 	wantCalls = append(wantCalls,
@@ -160,12 +161,12 @@ func TestSystemRouteManagerRotatesAddressInterfaceAndMTU(t *testing.T) {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		return nil
 	})
-	if err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	index = 19
 	manager.mtu = 1360
-	if err := manager.Update(true, newIP, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, newIP, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []fakeSystemRouteCall{
@@ -189,11 +190,11 @@ func TestSystemRouteManagerChangesAddressAndMTUInPlace(t *testing.T) {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		return nil
 	})
-	if err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	manager.mtu = 1360
-	if err := manager.Update(true, newIP, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, newIP, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []fakeSystemRouteCall{
@@ -218,12 +219,12 @@ func TestSystemRouteManagerPreservesOldRouteWhenReplacementInstallFails(t *testi
 		}
 		return nil
 	})
-	if err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	oldRoute := manager.routes[systemRouteIPv4]
 	index = 19
-	if err := manager.Update(true, newIP, netip.Addr{}); !errors.Is(err, sentinel) {
+	if _, err := manager.Update(true, newIP, netip.Addr{}); !errors.Is(err, sentinel) {
 		t.Fatalf("replacement error = %v, want %v", err, sentinel)
 	}
 	if got := manager.routes[systemRouteIPv4]; got != oldRoute {
@@ -251,13 +252,13 @@ func TestSystemRouteManagerRollsBackReplacementWhenOldDeleteFails(t *testing.T) 
 		}
 		return nil
 	})
-	if err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	oldRoute = manager.routes[systemRouteIPv4]
 	index = 19
 	newRoute = systemRoute{family: systemRouteIPv4, gateway: newIP, index: 19, mtu: 1280}
-	if err := manager.Update(true, newIP, netip.Addr{}); !errors.Is(err, sentinel) {
+	if _, err := manager.Update(true, newIP, netip.Addr{}); !errors.Is(err, sentinel) {
 		t.Fatalf("replacement error = %v, want %v", err, sentinel)
 	}
 	if got := manager.routes[systemRouteIPv4]; got != oldRoute {
@@ -279,17 +280,17 @@ func TestSystemRouteManagerExpiresMissingFamilyAfterGrace(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error { return nil })
 	manager.now = func() time.Time { return now }
-	if err := manager.Update(true, ip4, ip6); err != nil {
+	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, loaded := manager.routes[systemRouteIPv6]; !loaded {
 		t.Fatal("IPv6 route was removed before the handover grace expired")
 	}
 	now = now.Add(systemRouteHandoverGrace + time.Millisecond)
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, loaded := manager.routes[systemRouteIPv6]; loaded {
@@ -302,11 +303,11 @@ func TestSystemRouteManagerDropsMissingFamilyOnInterfaceReplacement(t *testing.T
 	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
 	index := 17
 	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(int, systemRoute) error { return nil })
-	if err := manager.Update(true, ip4, ip6); err != nil {
+	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
 	}
 	index = 19
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, loaded := manager.routes[systemRouteIPv6]; loaded {
@@ -324,7 +325,7 @@ func TestSystemRouteManagerRepairsExistingRoute(t *testing.T) {
 		}
 		return nil
 	})
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	wantRoute := systemRoute{family: systemRouteIPv4, gateway: ip4, index: 17, mtu: 1280}
@@ -345,7 +346,7 @@ func TestSystemRouteManagerDoesNotAdoptUnrepairableRoute(t *testing.T) {
 		}
 		return sentinel
 	})
-	err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{})
+	_, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("error = %v, want %v", err, sentinel)
 	}
@@ -364,7 +365,7 @@ func TestSystemRouteManagerPreservesSuccessfulFamily(t *testing.T) {
 		}
 		return nil
 	})
-	if err := manager.Update(true, ip4, ip6); !errors.Is(err, unix.ENXIO) {
+	if _, err := manager.Update(true, ip4, ip6); !errors.Is(err, unix.ENXIO) {
 		t.Fatalf("first update error = %v, want ENXIO", err)
 	}
 	if _, ok := manager.routes[systemRouteIPv4]; !ok {
@@ -374,7 +375,7 @@ func TestSystemRouteManagerPreservesSuccessfulFamily(t *testing.T) {
 		t.Fatal("failed IPv6 route was recorded")
 	}
 	failIPv6 = false
-	if err := manager.Update(true, ip4, ip6); err != nil {
+	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
 	}
 	if len(manager.routes) != 2 {
@@ -392,7 +393,7 @@ func TestSystemRouteManagerReportsBothFamilyErrors(t *testing.T) {
 		}
 		return unix.ENETUNREACH
 	})
-	err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.MustParseAddr("fd7a:115c:a1e0::1"))
+	_, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.MustParseAddr("fd7a:115c:a1e0::1"))
 	if !errors.Is(err, unix.EPERM) || !errors.Is(err, unix.ENETUNREACH) {
 		t.Fatalf("error = %v, want both EPERM and ENETUNREACH", err)
 	}
@@ -409,7 +410,7 @@ func TestSystemRouteManagerRejectsInvalidInterfaceIndex(t *testing.T) {
 				called = true
 				return nil
 			})
-			err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{})
+			_, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{})
 			if !errors.Is(err, unix.EINVAL) {
 				t.Fatalf("error = %v, want EINVAL", err)
 			}
@@ -440,7 +441,7 @@ func TestSystemRouteManagerRetriesReplaceRace(t *testing.T) {
 		}
 		return nil
 	})
-	if err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if want := []int{unix.RTM_ADD, unix.RTM_CHANGE, unix.RTM_ADD}; !reflect.DeepEqual(calls, want) {
@@ -467,7 +468,7 @@ func TestSystemRouteManagerRetriesReplaceRaceWithSecondConflict(t *testing.T) {
 		}
 		return nil
 	})
-	if err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []int{unix.RTM_ADD, unix.RTM_CHANGE, unix.RTM_ADD, unix.RTM_CHANGE}
@@ -491,17 +492,17 @@ func TestSystemRouteManagerPreservesStateOnDeleteFailure(t *testing.T) {
 		return nil
 	})
 	ip4 := netip.MustParseAddr("100.71.1.1")
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Update(false, netip.Addr{}, netip.Addr{}); !errors.Is(err, sentinel) {
+	if _, err := manager.Update(false, netip.Addr{}, netip.Addr{}); !errors.Is(err, sentinel) {
 		t.Fatalf("disable error = %v, want %v", err, sentinel)
 	}
 	if len(manager.routes) != 1 {
 		t.Fatalf("route bookkeeping lost after failed delete: %#v", manager.routes)
 	}
 	failDelete = false
-	if err := manager.Update(false, netip.Addr{}, netip.Addr{}); err != nil {
+	if _, err := manager.Update(false, netip.Addr{}, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(manager.routes) != 0 {
@@ -520,7 +521,7 @@ func TestSystemRouteManagerCloseRetriesFailedDelete(t *testing.T) {
 		}
 		return nil
 	})
-	if err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.MustParseAddr("fd7a:115c:a1e0::1")); err != nil {
+	if _, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.MustParseAddr("fd7a:115c:a1e0::1")); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Close(); !errors.Is(err, unix.EPERM) {
@@ -535,7 +536,7 @@ func TestSystemRouteManagerCloseRetriesFailedDelete(t *testing.T) {
 	if _, ok := manager.routes[systemRouteIPv6]; ok {
 		t.Fatal("successfully deleted IPv6 route was retained")
 	}
-	if err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.MustParseAddr("fd7a:115c:a1e0::1")); !errors.Is(err, net.ErrClosed) {
+	if _, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.MustParseAddr("fd7a:115c:a1e0::1")); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("update during close = %v, want net.ErrClosed", err)
 	}
 	failIPv4Delete = false
@@ -554,11 +555,11 @@ func TestSystemRouteManagerMissingInterface(t *testing.T) {
 	manager := newFakeSystemRouteManager(func() (int, int, error) { return 0, 0, unix.ENXIO }, func(int, systemRoute) error {
 		return unix.ENXIO
 	})
-	if err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{}); !errors.Is(err, unix.ENXIO) {
+	if _, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{}); !errors.Is(err, unix.ENXIO) {
 		t.Fatalf("enabled update error = %v, want ENXIO", err)
 	}
 	manager.routes[systemRouteIPv4] = systemRoute{family: systemRouteIPv4, gateway: netip.MustParseAddr("100.71.1.1"), index: 17, mtu: 1280}
-	if err := manager.Update(false, netip.Addr{}, netip.Addr{}); err != nil {
+	if _, err := manager.Update(false, netip.Addr{}, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(manager.routes) != 0 {
@@ -574,7 +575,7 @@ func TestSystemRouteManagerNoAddressesDoesNotNeedInterface(t *testing.T) {
 	}, func(int, systemRoute) error {
 		return nil
 	})
-	if err := manager.Update(true, netip.Addr{}, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, netip.Addr{}, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if called {
@@ -586,7 +587,7 @@ func TestSystemRouteManagerNoAddressesDoesNotNeedInterface(t *testing.T) {
 		index:   17,
 		mtu:     1280,
 	}
-	if err := manager.Update(true, netip.Addr{}, netip.Addr{}); !errors.Is(err, unix.ENXIO) {
+	if _, err := manager.Update(true, netip.Addr{}, netip.Addr{}); !errors.Is(err, unix.ENXIO) {
 		t.Fatalf("handover without a current interface error = %v, want ENXIO", err)
 	}
 	if _, ok := manager.routes[systemRouteIPv4]; !ok {
@@ -606,13 +607,13 @@ func TestSystemRouteManagerRefreshesMissingRoute(t *testing.T) {
 		return nil
 	})
 	ip4 := netip.MustParseAddr("100.71.1.1")
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if want := []int{unix.RTM_ADD}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("initial calls = %#v, want %#v", calls, want)
 	}
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
 	if want := []int{unix.RTM_ADD, unix.RTM_CHANGE, unix.RTM_ADD}; !reflect.DeepEqual(calls, want) {
@@ -629,10 +630,10 @@ func TestSystemRouteManagerRefreshErrorPreservesBookkeeping(t *testing.T) {
 		return nil
 	})
 	ip4 := netip.MustParseAddr("100.71.1.1")
-	if err := manager.Update(true, ip4, netip.Addr{}); err != nil {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Update(true, ip4, netip.Addr{}); !errors.Is(err, sentinel) {
+	if _, err := manager.Update(true, ip4, netip.Addr{}); !errors.Is(err, sentinel) {
 		t.Fatalf("refresh error = %v, want %v", err, sentinel)
 	}
 	if _, ok := manager.routes[systemRouteIPv4]; !ok {
@@ -651,7 +652,7 @@ func TestSystemRouteManagerConcurrentLifecycle(t *testing.T) {
 	})
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
-	if err := manager.Update(true, ip4, ip6); err != nil {
+	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
 	}
 	start := make(chan struct{})
@@ -662,7 +663,7 @@ func TestSystemRouteManagerConcurrentLifecycle(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for j := 0; j < 100; j++ {
-				_ = manager.Update(j%2 == 0, ip4, ip6)
+				_, _ = manager.Update(j%2 == 0, ip4, ip6)
 			}
 		}()
 	}
@@ -804,4 +805,113 @@ func FuzzScopedRouteMessageValidation(f *testing.F) {
 		_, _ = scopedRouteMessage(int(typ), route, 23, 29)
 		_, _ = marshalScopedRouteMessage(int(typ), route, 23, 29)
 	})
+}
+func TestSystemRouteManagerReturnsMissingFamilyDeadline(t *testing.T) {
+	ip4 := netip.MustParseAddr("100.71.1.1")
+	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
+	now := time.Unix(100, 0)
+	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error { return nil })
+	manager.now = func() time.Time { return now }
+	if _, err := manager.Update(true, ip4, ip6); err != nil {
+		t.Fatal(err)
+	}
+	retryAfter, err := manager.Update(true, ip4, netip.Addr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryAfter <= 0 || retryAfter > systemRouteHandoverGrace {
+		t.Fatalf("retryAfter = %v, want a bounded handover deadline", retryAfter)
+	}
+	now = now.Add(retryAfter + time.Millisecond)
+	retryAfter, err = manager.Update(true, ip4, netip.Addr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryAfter != 0 {
+		t.Fatalf("retryAfter after expiry = %v, want 0", retryAfter)
+	}
+	if _, loaded := manager.routes[systemRouteIPv6]; loaded {
+		t.Fatal("IPv6 route survived its scheduled handover expiry")
+	}
+}
+
+func TestSystemRouteManagerCleansUncertainInstall(t *testing.T) {
+	ip4 := netip.MustParseAddr("100.71.1.1")
+	kernelRoutes := make(map[systemRoute]bool)
+	acknowledgementLost := true
+	sentinel := errors.New("route acknowledgement lost")
+	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+		switch typ {
+		case unix.RTM_ADD:
+			kernelRoutes[route] = true
+			if acknowledgementLost {
+				acknowledgementLost = false
+				return sentinel
+			}
+		case unix.RTM_DELETE:
+			delete(kernelRoutes, route)
+		}
+		return nil
+	})
+	if _, err := manager.Update(true, ip4, netip.Addr{}); !errors.Is(err, sentinel) {
+		t.Fatalf("install error = %v, want %v", err, sentinel)
+	}
+	if len(manager.routes) != 0 || len(manager.ownedRoutes) != 1 {
+		t.Fatalf("state after uncertain install: routes=%#v owned=%#v", manager.routes, manager.ownedRoutes)
+	}
+	if _, err := manager.Update(false, netip.Addr{}, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(kernelRoutes) != 0 || len(manager.ownedRoutes) != 0 {
+		t.Fatalf("uncertain route escaped cleanup: kernel=%#v owned=%#v", kernelRoutes, manager.ownedRoutes)
+	}
+}
+
+func TestSystemRouteManagerRetainsBothRoutesAfterFailedRollback(t *testing.T) {
+	oldIP := netip.MustParseAddr("100.71.1.1")
+	newIP := netip.MustParseAddr("100.72.2.2")
+	index := 17
+	kernelRoutes := make(map[systemRoute]bool)
+	failDeletes := true
+	sentinel := errors.New("delete failed")
+	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
+		switch typ {
+		case unix.RTM_ADD, unix.RTM_CHANGE:
+			kernelRoutes[route] = true
+		case unix.RTM_DELETE:
+			if failDeletes {
+				return sentinel
+			}
+			delete(kernelRoutes, route)
+		}
+		return nil
+	})
+	if _, err := manager.Update(true, oldIP, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	index = 19
+	if _, err := manager.Update(true, newIP, netip.Addr{}); !errors.Is(err, sentinel) {
+		t.Fatalf("replacement error = %v, want %v", err, sentinel)
+	}
+	if len(kernelRoutes) != 2 || len(manager.ownedRoutes) != 2 {
+		t.Fatalf("failed rollback ownership: kernel=%#v owned=%#v", kernelRoutes, manager.ownedRoutes)
+	}
+	failDeletes = false
+	if _, err := manager.Update(false, netip.Addr{}, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(kernelRoutes) != 0 || len(manager.ownedRoutes) != 0 {
+		t.Fatalf("replacement routes escaped disable cleanup: kernel=%#v owned=%#v", kernelRoutes, manager.ownedRoutes)
+	}
+}
+
+func TestMissingDarwinInterfaceIsTransient(t *testing.T) {
+	manager := newSystemRouteManager("sing-box-route-test-interface-does-not-exist", 1280, t.TempDir())
+	_, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{})
+	if err == nil {
+		t.Fatal("missing interface unexpectedly succeeded")
+	}
+	if !isTransientSystemRouteError(err) {
+		t.Fatalf("missing interface error was classified as permanent: %v", err)
+	}
 }
