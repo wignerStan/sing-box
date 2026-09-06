@@ -8,6 +8,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+
+	"github.com/sagernet/tailscale/ipn"
 )
 
 var (
@@ -35,8 +37,8 @@ type systemRouteManager interface {
 // readiness part of one ordered state transition: an older watcher snapshot
 // cannot overwrite a newer SetTailscaleExitNode decision.
 func (t *Endpoint) systemExitNodeEnabled() bool {
-	localBackend := t.localBackend
-	if localBackend == nil {
+	localBackend := t.localBackend.Load()
+	if localBackend == nil || t.suspended.Load() || localBackend.State() != ipn.Running {
 		return false
 	}
 	prefs := localBackend.Prefs()

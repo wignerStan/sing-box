@@ -67,10 +67,15 @@ import (
 )
 
 var (
+	_ adapter.Endpoint                    = (*Endpoint)(nil)
+	_ adapter.Endpoint                    = (*userspaceEndpoint)(nil)
 	_ adapter.OutboundWithPreferredRoutes = (*Endpoint)(nil)
 	_ adapter.InterfaceUpdateListener     = (*Endpoint)(nil)
 	_ adapter.Referrer                    = (*Endpoint)(nil)
 	_ adapter.OnDemandEndpoint            = (*Endpoint)(nil)
+	_ adapter.OnDemandEndpoint            = (*userspaceEndpoint)(nil)
+	_ adapter.TailscaleEndpoint           = (*Endpoint)(nil)
+	_ adapter.TailscaleEndpoint           = (*userspaceEndpoint)(nil)
 	_ dialer.PacketDialerWithDestination  = (*Endpoint)(nil)
 	_ tun.Port                            = (*userspaceEndpoint)(nil)
 
@@ -294,10 +299,7 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		systemInterfaceName:        options.SystemInterfaceName,
 		systemInterfaceMTU:         options.SystemInterfaceMTU,
 		keyAuth:                    options.AuthKey != "",
-<<<<<<< ours
 		onDemand:                   options.OnDemand,
-	}, nil
-=======
 	}
 	if options.SystemInterface {
 		return tailscaleEndpoint, nil
@@ -307,15 +309,20 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	return userspaceEndpoint, nil
 }
 
-func unwrapEndpoint(raw adapter.Endpoint) (*Endpoint, bool) {
-	switch endpoint := raw.(type) {
-	case *Endpoint:
-		return endpoint, true
-	case *userspaceEndpoint:
-		return endpoint.Endpoint, true
-	default:
+type endpointCoreProvider interface {
+	endpointCore() *Endpoint
+}
+
+func (t *Endpoint) endpointCore() *Endpoint {
+	return t
+}
+
+func endpointCoreOf(raw adapter.Endpoint) (*Endpoint, bool) {
+	provider, loaded := raw.(endpointCoreProvider)
+	if !loaded {
 		return nil, false
 	}
+	return provider.endpointCore(), true
 }
 
 func (t *Endpoint) configureDataPlane() {
@@ -347,7 +354,6 @@ func (t *Endpoint) releaseGlobalHooks() {
 	netns.SetListenPacketFunc(nil)
 	tailscaleGlobalHookOwner = nil
 	t.globalHooksAcquired = false
->>>>>>> theirs
 }
 
 func (t *Endpoint) References() []string {
@@ -459,6 +465,9 @@ func (t *Endpoint) start() (retErr error) {
 		t.systemTunDevice = wgTunDevice
 		t.systemDialer = systemDialer
 		t.server.DataPlaneDial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			if err := t.resume(ctx); err != nil {
+				return nil, err
+			}
 			return systemDialer.DialContext(ctx, network, M.ParseSocksaddr(address))
 		}
 		t.systemRouteMu.Lock()
@@ -538,17 +547,12 @@ func (t *Endpoint) postStart() error {
 		return err
 	}
 	localBackend := t.server.ExportLocalBackend()
-<<<<<<< ours
 	t.localBackend.Store(localBackend)
-	if !version.IsAppleTV() {
-=======
-	t.localBackend = localBackend
 	// Publish the started state only after the backend handle is available. This
 	// keeps callbacks and route reconciliation from observing a half-initialized
 	// server during the startup handoff.
 	t.serverStarted.Store(true)
 	if !version.IsAppleTV() && !t.systemInterface {
->>>>>>> theirs
 		registerTaildropEndpoint(localBackend, t)
 		go t.taildrop.start()
 	}
@@ -893,20 +897,14 @@ func (t *Endpoint) Logout(ctx context.Context) error {
 func (t *Endpoint) Close() error {
 	var err error
 	t.started.Store(false)
-<<<<<<< ours
-	localBackend := t.localBackend.Swap(nil)
-	if localBackend != nil {
-		unregisterTaildropEndpoint(localBackend)
-=======
 	serverWasStarted := t.serverStarted.Swap(false)
 	t.stopSystemRouteUpdater()
 	if routeErr := t.closeSystemRouteManagerWithRetry(); routeErr != nil {
 		err = routeErr
 	}
-	if t.localBackend != nil {
-		unregisterTaildropEndpoint(t.localBackend)
-		t.localBackend = nil
->>>>>>> theirs
+	localBackend := t.localBackend.Swap(nil)
+	if localBackend != nil {
+		unregisterTaildropEndpoint(localBackend)
 	}
 	t.taildrop.close()
 	if t.icmpForwarder != nil {
@@ -1001,12 +999,28 @@ func (t *Endpoint) suspendLocked() {
 		return
 	}
 	t.suspended.Store(true)
+	// Withdraw scoped exit routes when this endpoint stops carrying payload.
+	// Reconciliation stays asynchronous so idle management cannot block on an
+	// operating-system routing socket.
+	t.requestSystemRouteUpdate()
+}
+
+func (t *Endpoint) waitSystemRouteReady(ctx context.Context) error {
+	if !t.systemInterface {
+		return nil
+	}
+	routeCtx, cancel := context.WithTimeout(ctx, systemRouteApplyTimeout)
+	defer cancel()
+	if err := t.requestSystemRouteUpdateAndWait(routeCtx); err != nil {
+		return E.Cause(err, "prepare Tailscale system exit route")
+	}
+	return nil
 }
 
 func (t *Endpoint) resume(ctx context.Context) error {
 	t.idleRequested.Store(false)
 	if !t.suspended.Load() {
-		return nil
+		return t.waitSystemRouteReady(ctx)
 	}
 	t.suspendAccess.Lock()
 	if !t.suspended.Load() {
@@ -1041,7 +1055,7 @@ func (t *Endpoint) resume(ctx context.Context) error {
 	if t.suspended.Load() {
 		return E.New("Tailscale backend is not running")
 	}
-	return nil
+	return t.waitSystemRouteReady(ctx)
 }
 
 func (t *Endpoint) awaitRunning(localBackend *ipnlocal.LocalBackend, resumeDone chan struct{}) {
