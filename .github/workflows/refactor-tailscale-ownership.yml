@@ -1,0 +1,923 @@
+name: Refactor tailscale ownership boundaries
+
+on:
+  push:
+    branches:
+      - automation/refactor-tailscale-ownership-20260906
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current-upstream rebuild
+        uses: actions/checkout@v4
+        with:
+          ref: rebuild/tailscale-system-interface-work
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Extract private ownership units
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Jacob"
+          git config user.email "240170694+wignerStan@users.noreply.github.com"
+          git switch --force-create rebuild/tailscale-system-interface-owned
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          package = Path("protocol/tailscale")
+          endpoint_path = package / "endpoint.go"
+          endpoint = endpoint_path.read_text()
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if text.count(old) != 1:
+                  raise SystemExit(f"{label}: expected one match, found {text.count(old)}")
+              return text.replace(old, new, 1)
+
+          endpoint = replace_once(
+              endpoint,
+              "\n\ttailscaleGlobalHookAccess sync.Mutex\n\ttailscaleGlobalHookOwner  *Endpoint\n",
+              "",
+              "process hook globals",
+          )
+          endpoint = replace_once(
+              endpoint,
+              '''// userspaceEndpoint adds the packet-level tun.Port capability used by
+// sing-box flow routing. A system-interface endpoint intentionally does not
+// implement tun.Port: packets must traverse the real OS TUN exactly once.
+type userspaceEndpoint struct {
+	*Endpoint
+}
+
+''',
+              "",
+              "userspace endpoint type",
+          )
+          endpoint = replace_once(
+              endpoint,
+              '''	systemTunDevice       wgTun.Device
+	systemDialer          *dialer.DefaultDialer
+	systemRouteManager    systemRouteManager
+	systemRouteMu         sync.Mutex
+	systemRouteUpdate     chan struct{}
+	systemRouteStop       chan struct{}
+	systemRouteWG         sync.WaitGroup
+	systemRouteStopping   bool
+	systemRouteGeneration uint64
+	systemRouteWaiters    map[uint64]chan error
+	exitNodeUpdateMu      sync.Mutex
+	globalHooksAcquired   bool
+	userspaceHandler      tun.Handler
+	fallbackTCPCloser     func()
+''',
+              '''	systemTunDevice  wgTun.Device
+	systemDialer     *dialer.DefaultDialer
+	systemRoutes     *systemExitRouteFacility
+	exitNodeUpdateMu sync.Mutex
+	processHooks     *processHookLease
+	userspaceHandler tun.Handler
+	fallbackTCPCloser func()
+''',
+              "endpoint mechanism fields",
+          )
+          endpoint = replace_once(
+              endpoint,
+              '''const (
+	systemRouteRetryMinDelay = 250 * time.Millisecond
+	systemRouteRetryMaxDelay = 5 * time.Second
+	systemRouteCloseAttempts = 4
+	systemRouteCloseDelay    = 200 * time.Millisecond
+	systemRouteApplyTimeout  = 15 * time.Second
+)
+
+''',
+              "",
+              "route facility constants",
+          )
+
+          helper_start = endpoint.index("type endpointCoreProvider interface")
+          helper_end = endpoint.index("func (t *Endpoint) References", helper_start)
+          endpoint = endpoint[:helper_start] + endpoint[helper_end:]
+
+          endpoint = endpoint.replace("t.acquireGlobalHooks()", "t.acquireProcessHooks()")
+          endpoint = endpoint.replace("t.releaseGlobalHooks()", "t.releaseProcessHooks()")
+          endpoint = replace_once(
+              endpoint,
+              '''		t.systemRouteMu.Lock()
+		t.systemRouteManager = newSystemRouteManager(tunName, mtu, t.server.Dir)
+		t.systemRouteMu.Unlock()
+		t.startSystemRouteUpdater()
+''',
+              '''		t.startSystemExitRoutes(tunName, mtu)
+''',
+              "route facility startup",
+          )
+          endpoint = replace_once(
+              endpoint,
+              '''		t.stopSystemRouteUpdater()
+		if routeErr := t.closeSystemRouteManager(); routeErr != nil {
+			err = E.Errors(err, routeErr)
+		}
+''',
+              '''		if routeErr := t.closeSystemExitRoutes(); routeErr != nil {
+			err = E.Errors(err, routeErr)
+		}
+''',
+              "post-start route cleanup",
+          )
+          endpoint = replace_once(
+              endpoint,
+              '''	t.stopSystemRouteUpdater()
+	if routeErr := t.closeSystemRouteManagerWithRetry(); routeErr != nil {
+		err = routeErr
+	}
+''',
+              '''	if routeErr := t.closeSystemExitRoutes(); routeErr != nil {
+		err = routeErr
+	}
+''',
+              "endpoint route cleanup",
+          )
+          endpoint = endpoint.replace("requestSystemRouteUpdateAndWait", "waitSystemExitRouteUpdate")
+          endpoint = endpoint.replace("requestSystemRouteUpdate", "requestSystemExitRouteUpdate")
+          endpoint = endpoint.replace("waitSystemRouteReady", "waitSystemExitRouteReady")
+          endpoint = endpoint.replace("systemRouteApplyTimeout", "systemExitRouteApplyTimeout")
+
+          worker_start = endpoint.index("func (t *Endpoint) updateSystemRoutes()")
+          worker_end = endpoint.index("func addressFromAddr", worker_start)
+          endpoint = endpoint[:worker_start] + endpoint[worker_end:]
+
+          forbidden = (
+              "systemRouteMu",
+              "systemRouteManager",
+              "systemRouteUpdate",
+              "systemRouteStop",
+              "systemRouteWG",
+              "systemRouteStopping",
+              "systemRouteGeneration",
+              "systemRouteWaiters",
+              "GlobalHooks",
+              "globalHooksAcquired",
+          )
+          for symbol in forbidden:
+              if symbol in endpoint:
+                  raise SystemExit(f"endpoint still owns {symbol}")
+          endpoint_path.write_text(endpoint)
+
+          (package / "dataplane_mode.go").write_text(r'''//go:build with_gvisor
+
+package tailscale
+
+import (
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/tailscale/tsnet"
+)
+
+// userspaceEndpoint adds the packet-level tun.Port capability used by
+// sing-box flow routing. A system-interface endpoint intentionally does not
+// implement tun.Port: packets must traverse the real OS TUN exactly once.
+type userspaceEndpoint struct {
+	*Endpoint
+}
+
+// endpointCoreProvider is sealed to this package. It lets package-local
+// integrations reach the shared endpoint owner without teaching each caller
+// about every mode-specific wrapper.
+type endpointCoreProvider interface {
+	endpointCore() *Endpoint
+}
+
+func (t *Endpoint) endpointCore() *Endpoint {
+	return t
+}
+
+func endpointCoreOf(raw adapter.Endpoint) (*Endpoint, bool) {
+	provider, loaded := raw.(endpointCoreProvider)
+	if !loaded {
+		return nil, false
+	}
+	return provider.endpointCore(), true
+}
+
+func (t *Endpoint) configureDataPlane() {
+	if t.systemInterface {
+		t.server.DataPlaneMode = tsnet.DataPlaneSystem
+	}
+}
+''')
+
+          (package / "process_hooks.go").write_text(r'''//go:build with_gvisor
+
+package tailscale
+
+import (
+	"sync"
+
+	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/tailscale/net/netmon"
+	"github.com/sagernet/tailscale/net/netns"
+)
+
+var tailscaleProcessHookRegistry struct {
+	sync.Mutex
+	lease *processHookLease
+}
+
+// processHookLease gives one endpoint explicit ownership of Tailscale's
+// process-global network hooks. Releasing a stale or foreign lease cannot
+// clear hooks installed by the current owner.
+type processHookLease struct {
+	owner    *Endpoint
+	released bool
+}
+
+func acquireProcessHookLease(owner *Endpoint) (*processHookLease, error) {
+	if owner == nil {
+		return nil, E.New("missing Tailscale process-hook owner")
+	}
+	tailscaleProcessHookRegistry.Lock()
+	defer tailscaleProcessHookRegistry.Unlock()
+	if current := tailscaleProcessHookRegistry.lease; current != nil && !current.released {
+		return nil, E.New("only one Tailscale endpoint can be active per sing-box process while Tailscale socket hooks are process-global")
+	}
+	lease := &processHookLease{owner: owner}
+	tailscaleProcessHookRegistry.lease = lease
+	return lease, nil
+}
+
+func (l *processHookLease) Release() {
+	if l == nil {
+		return
+	}
+	tailscaleProcessHookRegistry.Lock()
+	defer tailscaleProcessHookRegistry.Unlock()
+	if l.released {
+		return
+	}
+	l.released = true
+	if tailscaleProcessHookRegistry.lease != l {
+		return
+	}
+	netmon.RegisterInterfaceGetter(nil)
+	netns.SetControlFunc(nil)
+	netns.SetListenPacketFunc(nil)
+	tailscaleProcessHookRegistry.lease = nil
+}
+
+func (t *Endpoint) acquireProcessHooks() error {
+	if t.processHooks != nil {
+		return nil
+	}
+	lease, err := acquireProcessHookLease(t)
+	if err != nil {
+		return err
+	}
+	t.processHooks = lease
+	return nil
+}
+
+func (t *Endpoint) releaseProcessHooks() {
+	lease := t.processHooks
+	t.processHooks = nil
+	lease.Release()
+}
+''')
+
+          (package / "system_exit_route_facility.go").write_text(r'''//go:build with_gvisor
+
+package tailscale
+
+import (
+	"context"
+	"net"
+	"net/netip"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing/common/logger"
+)
+
+const (
+	systemExitRouteRetryMinDelay = 250 * time.Millisecond
+	systemExitRouteRetryMaxDelay = 5 * time.Second
+	systemExitRouteCloseAttempts = 4
+	systemExitRouteCloseDelay    = 200 * time.Millisecond
+	systemExitRouteApplyTimeout  = 15 * time.Second
+)
+
+type systemExitRouteSnapshot func() (enabled bool, ip4, ip6 netip.Addr)
+
+// systemExitRouteFacility owns route-worker lifecycle, coalescing, retry,
+// readiness generations, cancellation, and ordered cleanup. Platform route
+// reconciliation remains behind systemExitRouteReconciler.
+type systemExitRouteFacility struct {
+	logger     logger.ContextLogger
+	reconciler systemExitRouteReconciler
+	active     func() bool
+	snapshot   systemExitRouteSnapshot
+
+	mu         sync.Mutex
+	updates    chan struct{}
+	stop       chan struct{}
+	wg         sync.WaitGroup
+	stopping   bool
+	generation uint64
+	waiters    map[uint64]chan error
+}
+
+func newSystemExitRouteFacility(
+	logger logger.ContextLogger,
+	reconciler systemExitRouteReconciler,
+	active func() bool,
+	snapshot systemExitRouteSnapshot,
+) *systemExitRouteFacility {
+	return &systemExitRouteFacility{
+		logger:     logger,
+		reconciler: reconciler,
+		active:     active,
+		snapshot:   snapshot,
+		waiters:    make(map[uint64]chan error),
+	}
+}
+
+// Start moves route socket I/O off Tailscale's reconfigure callback. That
+// callback may run under WireGuard internals, so a stalled routing socket must
+// never block control-plane convergence.
+func (f *systemExitRouteFacility) Start() {
+	f.mu.Lock()
+	if f.updates != nil || f.stopping || f.reconciler == nil {
+		f.mu.Unlock()
+		return
+	}
+	updates := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	f.updates = updates
+	f.stop = stop
+	if f.waiters == nil {
+		f.waiters = make(map[uint64]chan error)
+	}
+	f.wg.Add(1)
+	f.mu.Unlock()
+	go func() {
+		defer f.wg.Done()
+		runSystemExitRouteUpdater(
+			updates,
+			stop,
+			f.updateResult,
+			f.completeGeneration,
+			systemExitRouteRetryMinDelay,
+			systemExitRouteRetryMaxDelay,
+		)
+	}()
+}
+
+func (f *systemExitRouteFacility) Request() {
+	_, _ = f.queue(nil)
+}
+
+func (f *systemExitRouteFacility) RequestAndWait(ctx context.Context) error {
+	waiter := make(chan error, 1)
+	generation, queued := f.queue(waiter)
+	if !queued {
+		return nil
+	}
+	select {
+	case err := <-waiter:
+		return err
+	case <-ctx.Done():
+		f.mu.Lock()
+		if current, loaded := f.waiters[generation]; loaded && current == waiter {
+			delete(f.waiters, generation)
+		}
+		f.mu.Unlock()
+		return ctx.Err()
+	}
+}
+
+func (f *systemExitRouteFacility) Stop() {
+	f.mu.Lock()
+	stop := f.stop
+	if stop == nil || f.stopping {
+		f.mu.Unlock()
+		return
+	}
+	f.stopping = true
+	close(stop)
+	f.mu.Unlock()
+	f.wg.Wait()
+	f.mu.Lock()
+	if f.stop == stop {
+		f.stop = nil
+		f.updates = nil
+	}
+	f.stopping = false
+	f.mu.Unlock()
+	f.failWaiters(net.ErrClosed)
+}
+
+func (f *systemExitRouteFacility) Close() error {
+	f.Stop()
+	var lastErr error
+	for attempt := 0; attempt < systemExitRouteCloseAttempts; attempt++ {
+		lastErr = f.closeReconciler()
+		if lastErr == nil || !isTransientSystemRouteError(lastErr) {
+			return lastErr
+		}
+		if attempt+1 == systemExitRouteCloseAttempts {
+			break
+		}
+		time.Sleep(systemExitRouteCloseDelay)
+	}
+	return lastErr
+}
+
+func (f *systemExitRouteFacility) updateResult() (uint64, time.Duration, error) {
+	f.mu.Lock()
+	generation := f.generation
+	reconciler := f.reconciler
+	active := f.active
+	snapshot := f.snapshot
+	f.mu.Unlock()
+	if reconciler == nil || active == nil || !active() || snapshot == nil {
+		return generation, 0, nil
+	}
+	enabled, ip4, ip6 := snapshot()
+	retryAfter, err := reconciler.Update(enabled, ip4, ip6)
+	if err != nil {
+		if f.logger != nil {
+			if isTransientSystemRouteError(err) {
+				f.logger.Debug("update Tailscale system exit routes: ", err)
+			} else {
+				f.logger.Warn("update Tailscale system exit routes: ", err)
+			}
+		}
+		return generation, retryAfter, err
+	}
+	if systemRouteRequiresAddress && enabled && !validSystemRouteAddress(ip4) && !validSystemRouteAddress(ip6) {
+		return generation, retryAfter, errSystemRouteAddressPending
+	}
+	return generation, retryAfter, nil
+}
+
+func validSystemRouteAddress(address netip.Addr) bool {
+	return address.IsValid() && !address.IsUnspecified()
+}
+
+func (f *systemExitRouteFacility) queue(waiter chan error) (uint64, bool) {
+	f.mu.Lock()
+	updates := f.updates
+	if updates == nil || f.active == nil || !f.active() {
+		f.mu.Unlock()
+		return 0, false
+	}
+	f.generation++
+	generation := f.generation
+	if waiter != nil {
+		if f.waiters == nil {
+			f.waiters = make(map[uint64]chan error)
+		}
+		f.waiters[generation] = waiter
+	}
+	f.mu.Unlock()
+	select {
+	case updates <- struct{}{}:
+	default:
+	}
+	return generation, true
+}
+
+func (f *systemExitRouteFacility) completeGeneration(generation uint64, err error) {
+	f.mu.Lock()
+	for waiterGeneration, waiter := range f.waiters {
+		if waiterGeneration > generation {
+			continue
+		}
+		delete(f.waiters, waiterGeneration)
+		waiter <- err
+	}
+	f.mu.Unlock()
+}
+
+func (f *systemExitRouteFacility) failWaiters(err error) {
+	f.mu.Lock()
+	for generation, waiter := range f.waiters {
+		delete(f.waiters, generation)
+		waiter <- err
+	}
+	f.mu.Unlock()
+}
+
+func (f *systemExitRouteFacility) closeReconciler() error {
+	f.mu.Lock()
+	reconciler := f.reconciler
+	f.mu.Unlock()
+	if reconciler == nil {
+		return nil
+	}
+	err := reconciler.Close()
+	if err == nil {
+		f.mu.Lock()
+		if f.reconciler == reconciler {
+			f.reconciler = nil
+		}
+		f.mu.Unlock()
+	}
+	return err
+}
+
+func runSystemExitRouteUpdater(
+	updates <-chan struct{},
+	stop <-chan struct{},
+	update func() (uint64, time.Duration, error),
+	complete func(uint64, error),
+	retryMinDelay time.Duration,
+	retryMaxDelay time.Duration,
+) {
+	if retryMinDelay <= 0 {
+		retryMinDelay = time.Millisecond
+	}
+	if retryMaxDelay < retryMinDelay {
+		retryMaxDelay = retryMinDelay
+	}
+	for {
+		select {
+		case _, loaded := <-updates:
+			if !loaded {
+				return
+			}
+		case <-stop:
+			return
+		}
+		retryDelay := retryMinDelay
+	retryLoop:
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			generation, deferredDelay, err := update()
+			transient := err != nil && isTransientSystemRouteError(err)
+			if err == nil {
+				complete(generation, nil)
+				if deferredDelay <= 0 {
+					break retryLoop
+				}
+				retryDelay = retryMinDelay
+			} else if !transient {
+				complete(generation, err)
+				if deferredDelay <= 0 {
+					break retryLoop
+				}
+				retryDelay = retryMinDelay
+			}
+
+			waitDelay := retryDelay
+			if deferredDelay > 0 && (err == nil || !transient || deferredDelay < waitDelay) {
+				waitDelay = deferredDelay
+			}
+			timer := time.NewTimer(waitDelay)
+			select {
+			case _, loaded := <-updates:
+				stopSystemExitRouteRetryTimer(timer)
+				if !loaded {
+					return
+				}
+				retryDelay = retryMinDelay
+				continue
+			case <-stop:
+				stopSystemExitRouteRetryTimer(timer)
+				return
+			case <-timer.C:
+				if transient && waitDelay == retryDelay && retryDelay < retryMaxDelay {
+					retryDelay *= 2
+					if retryDelay > retryMaxDelay {
+						retryDelay = retryMaxDelay
+					}
+				}
+			}
+		}
+	}
+}
+
+func stopSystemExitRouteRetryTimer(timer *time.Timer) {
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
+}
+''')
+
+          # Clarify the platform reconciliation owner without changing its
+          # transactional route semantics.
+          for path in package.glob("*.go"):
+              source = path.read_text()
+              source = source.replace("SystemRouteManager", "SystemExitRouteReconciler")
+              source = source.replace("systemRouteManager", "systemExitRouteReconciler")
+              path.write_text(source)
+
+          shared_old = package / "system_routes.go"
+          shared_new = package / "system_exit_route.go"
+          shared_old.rename(shared_new)
+          shared = shared_new.read_text()
+          shared += r'''
+
+func (t *Endpoint) startSystemExitRoutes(interfaceName string, mtu uint32) {
+	if t.systemRoutes != nil {
+		return
+	}
+	t.systemRoutes = newSystemExitRouteFacility(
+		t.logger,
+		newSystemExitRouteReconciler(interfaceName, mtu, t.server.Dir),
+		func() bool {
+			return t.server != nil && t.serverStarted.Load()
+		},
+		func() (bool, netip.Addr, netip.Addr) {
+			ip4, ip6 := t.server.TailscaleIPs()
+			return t.systemExitNodeEnabled(), ip4, ip6
+		},
+	)
+	t.systemRoutes.Start()
+}
+
+func (t *Endpoint) requestSystemExitRouteUpdate() {
+	if t.systemRoutes != nil {
+		t.systemRoutes.Request()
+	}
+}
+
+func (t *Endpoint) waitSystemExitRouteUpdate(ctx context.Context) error {
+	if t.systemRoutes == nil {
+		return nil
+	}
+	return t.systemRoutes.RequestAndWait(ctx)
+}
+
+func (t *Endpoint) closeSystemExitRoutes() error {
+	if t.systemRoutes == nil {
+		return nil
+	}
+	return t.systemRoutes.Close()
+}
+'''
+          # context is now needed by the endpoint/facility handoff.
+          shared = shared.replace('import (\n', 'import (\n\t"context"\n', 1)
+          shared_new.write_text(shared)
+
+          stub_old = package / "system_routes_stub.go"
+          stub_old.rename(package / "system_exit_route_stub.go")
+
+          darwin_old = package / "system_routes_darwin.go"
+          darwin = darwin_old.read_text()
+          family_start = darwin.index("type systemRouteFamily")
+          operation_start = darwin.index("type routeOperationError")
+          owner_start = darwin.index("type darwinSystemExitRouteReconciler")
+          socket_start = darwin.index("// Keep the small operation helpers")
+          family_block = darwin[family_start:operation_start]
+          operation_block = darwin[operation_start:owner_start]
+          owner_block = darwin[owner_start:socket_start]
+          socket_block = darwin[socket_start:]
+
+          (package / "system_exit_route_darwin.go").write_text(
+              '''//go:build with_gvisor && darwin\n\npackage tailscale\n\nimport (\n\t"errors"\n\t"fmt"\n\t"net"\n\t"net/netip"\n\t"sort"\n\t"sync"\n\t"time"\n\n\t"golang.org/x/sys/unix"\n)\n\nconst (\n\tsystemRouteHandoverGrace   = 5 * time.Second\n\tsystemRouteRequiresAddress = true\n)\n\n'''
+              + family_block
+              + owner_block
+          )
+          (package / "system_exit_route_socket_darwin.go").write_text(
+              '''//go:build with_gvisor && darwin\n\npackage tailscale\n\nimport (\n\t"encoding/binary"\n\t"errors"\n\t"io"\n\t"os"\n\t"sync/atomic"\n\t"syscall"\n\t"time"\n\t"unsafe"\n\n\t"golang.org/x/net/route"\n\t"golang.org/x/sys/unix"\n)\n\nvar systemRouteMessageSeq atomic.Int32\n\nconst scopedRouteReplyTimeout = time.Second\n\n'''
+              + operation_block
+              + socket_block
+          )
+          darwin_old.unlink()
+
+          darwin_test_old = package / "system_routes_darwin_test.go"
+          darwin_test_old.rename(package / "system_exit_route_darwin_test.go")
+
+          # Split tests along the same private ownership boundaries.
+          old_test_path = package / "endpoint_mode_test.go"
+          old_test = old_test_path.read_text()
+          type_start = old_test.index("type endpointTestRouteReconciler")
+          dataplane_start = old_test.index("func TestSystemInterfaceEndpointDoesNotImplementPort")
+          hooks_start = old_test.index("func TestGlobalHookOwnershipRejectsSecondEndpoint")
+          facility_start = old_test.index("func TestSystemRouteReadinessWaiter")
+          type_block = old_test[type_start:dataplane_start]
+          dataplane_block = old_test[dataplane_start:hooks_start]
+          facility_block = old_test[facility_start:]
+
+          dataplane_block = dataplane_block.replace("TestUnwrapEndpoint", "TestEndpointCoreOf")
+          dataplane_block = dataplane_block.replace("unwrapEndpoint", "endpointCoreOf")
+          (package / "dataplane_mode_test.go").write_text(
+              '''//go:build with_gvisor\n\npackage tailscale\n\nimport (\n\t"testing"\n\n\t"github.com/sagernet/sing-box/adapter"\n\t"github.com/sagernet/sing-tun"\n\t"github.com/sagernet/tailscale/tsnet"\n)\n\n'''
+              + dataplane_block
+          )
+
+          (package / "process_hooks_test.go").write_text(r'''//go:build with_gvisor
+
+package tailscale
+
+import "testing"
+
+func TestProcessHookLeaseRejectsSecondEndpoint(t *testing.T) {
+	first := &Endpoint{}
+	second := &Endpoint{}
+	firstLease, err := acquireProcessHookLease(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(firstLease.Release)
+	if secondLease, acquireErr := acquireProcessHookLease(second); acquireErr == nil {
+		secondLease.Release()
+		t.Fatal("second endpoint unexpectedly acquired process-global Tailscale hooks")
+	}
+	firstLease.Release()
+	secondLease, err := acquireProcessHookLease(second)
+	if err != nil {
+		t.Fatalf("second endpoint could not acquire hooks after release: %v", err)
+	}
+	secondLease.Release()
+	secondLease.Release()
+}
+''')
+
+          def replace_function(source: str, name: str, replacement: str) -> str:
+              start = source.index(f"func {name}(")
+              next_match = re.search(r"\nfunc ", source[start + 1:])
+              end = len(source) if next_match is None else start + 1 + next_match.start()
+              return source[:start] + replacement.rstrip() + "\n" + source[end:]
+
+          facility_block = replace_function(
+              facility_block,
+              "TestSystemRouteReadinessWaiter",
+              r'''func TestSystemExitRouteReadinessWaiter(t *testing.T) {
+	facility := &systemExitRouteFacility{
+		active:  func() bool { return true },
+		updates: make(chan struct{}, 1),
+		waiters: make(map[uint64]chan error),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- facility.RequestAndWait(context.Background())
+	}()
+	select {
+	case <-facility.updates:
+	case <-time.After(time.Second):
+		t.Fatal("route update was not queued")
+	}
+	facility.mu.Lock()
+	generation := facility.generation
+	facility.mu.Unlock()
+	facility.completeGeneration(generation, nil)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("route readiness waiter was not completed")
+	}
+}''',
+          )
+          facility_block = replace_function(
+              facility_block,
+              "TestCloseSystemRouteManagerRetainsFailedCleanup",
+              r'''func TestCloseSystemExitRouteReconcilerRetainsFailedCleanup(t *testing.T) {
+	sentinel := errors.New("cleanup failed")
+	reconciler := &endpointTestRouteReconciler{closeErr: sentinel}
+	facility := &systemExitRouteFacility{reconciler: reconciler}
+	if err := facility.closeReconciler(); !errors.Is(err, sentinel) {
+		t.Fatalf("first close error = %v, want %v", err, sentinel)
+	}
+	if facility.reconciler != reconciler {
+		t.Fatal("failed route cleanup discarded reconciler before retry")
+	}
+	if err := facility.closeReconciler(); err != nil {
+		t.Fatal(err)
+	}
+	if facility.reconciler != nil {
+		t.Fatal("successful retry retained route reconciler")
+	}
+	if reconciler.closeCall != 2 {
+		t.Fatalf("close calls = %d, want 2", reconciler.closeCall)
+	}
+}''',
+          )
+          facility_block = replace_function(
+              facility_block,
+              "TestSystemRouteUpdaterLifecycleIsIdempotent",
+              r'''func TestSystemExitRouteFacilityLifecycleIsIdempotent(t *testing.T) {
+	facility := newSystemExitRouteFacility(
+		nil,
+		&endpointTestRouteReconciler{},
+		func() bool { return true },
+		func() (bool, netip.Addr, netip.Addr) { return false, netip.Addr{}, netip.Addr{} },
+	)
+	for i := 0; i < 100; i++ {
+		facility.Start()
+		facility.Start()
+		for j := 0; j < 8; j++ {
+			facility.Request()
+		}
+		facility.Stop()
+		facility.mu.Lock()
+		active := facility.updates != nil || facility.stop != nil
+		facility.mu.Unlock()
+		if active {
+			t.Fatal("route facility channels remained after stop")
+		}
+	}
+}''',
+          )
+          facility_block = replace_function(
+              facility_block,
+              "TestSystemRouteUpdaterConcurrentStartStop",
+              r'''func TestSystemExitRouteFacilityConcurrentStartStop(t *testing.T) {
+	facility := newSystemExitRouteFacility(
+		nil,
+		&endpointTestRouteReconciler{},
+		func() bool { return true },
+		func() (bool, netip.Addr, netip.Addr) { return false, netip.Addr{}, netip.Addr{} },
+	)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			facility.Start()
+		}()
+		go func() {
+			defer wg.Done()
+			facility.Stop()
+		}()
+	}
+	wg.Wait()
+	facility.Stop()
+	facility.mu.Lock()
+	defer facility.mu.Unlock()
+	if facility.updates != nil || facility.stop != nil {
+		t.Fatal("route facility remained active after concurrent start/stop")
+	}
+}''',
+          )
+          facility_block = facility_block.replace("runSystemRouteUpdater", "runSystemExitRouteUpdater")
+          facility_block = facility_block.replace("TestRunSystemRoute", "TestRunSystemExitRoute")
+          facility_block = facility_block.replace("TestSystemRouteError", "TestSystemExitRouteError")
+          (package / "system_exit_route_facility_test.go").write_text(
+              '''//go:build with_gvisor\n\npackage tailscale\n\nimport (\n\t"context"\n\t"errors"\n\t"net/netip"\n\t"sync"\n\t"syscall"\n\t"testing"\n\t"time"\n)\n\n'''
+              + type_block
+              + facility_block
+          )
+          old_test_path.unlink()
+
+          # File and symbol checks catch accidental duplicate owners before Go
+          # compilation turns them into less useful secondary errors.
+          checks = {
+              "endpoint.go": ("systemRoutes *systemExitRouteFacility", "processHooks *processHookLease"),
+              "dataplane_mode.go": ("type userspaceEndpoint", "type endpointCoreProvider"),
+              "process_hooks.go": ("type processHookLease", "tailscaleProcessHookRegistry"),
+              "system_exit_route_facility.go": ("type systemExitRouteFacility", "runSystemExitRouteUpdater"),
+              "system_exit_route_darwin.go": ("type darwinSystemExitRouteReconciler",),
+              "system_exit_route_socket_darwin.go": ("func executeScopedRoute",),
+          }
+          for name, needles in checks.items():
+              contents = (package / name).read_text()
+              for needle in needles:
+                  if needle not in contents:
+                      raise SystemExit(f"{name} missing {needle}")
+          PY
+
+          go install golang.org/x/tools/cmd/goimports@v0.38.0
+          goimports -w protocol/tailscale/*.go
+          git diff --check
+          ! grep -RInE '^(<<<<<<<|=======|>>>>>>>)' protocol/tailscale
+          test "$(grep -RIl 'type systemExitRouteFacility' protocol/tailscale --include='*.go' | wc -l)" = 1
+          test "$(grep -RIl 'type processHookLease' protocol/tailscale --include='*.go' | wc -l)" = 1
+          test "$(grep -RIl 'type userspaceEndpoint' protocol/tailscale --include='*.go' | wc -l)" = 1
+
+          go test -tags with_gvisor -count=1 ./protocol/tailscale
+          go vet -tags with_gvisor ./protocol/tailscale
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -tags with_gvisor -o /tmp/tailscale-darwin.test ./protocol/tailscale
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -tags with_gvisor -o /tmp/tailscale-windows.test.exe ./protocol/tailscale
+
+          git add protocol/tailscale
+          git commit -m "refactor(tailscale): separate dataplane and route lifecycle owners" \
+            -m "Keep the current-upstream behavior while moving mode capabilities, process-global hook ownership, route worker lifecycle, Darwin reconciliation, and AF_ROUTE effects into explicit package-private owners. The Endpoint now delegates instead of carrying worker channels, waiters, route state, and global-hook flags directly." \
+            -m "Signed-off-by: Jacob <240170694+wignerStan@users.noreply.github.com>"
+          git push --force origin HEAD:rebuild/tailscale-system-interface-owned
+
+      - name: Remove temporary workflow branch
+        if: always()
+        run: git push origin --delete automation/refactor-tailscale-ownership-20260906
