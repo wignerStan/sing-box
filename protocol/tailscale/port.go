@@ -18,25 +18,25 @@ import (
 	"github.com/sagernet/tailscale/wgengine/filter"
 )
 
-func (t *Endpoint) PreMatchFlow(network string, destination netip.Addr) adapter.PreMatchAction {
+func (t *userspaceEndpoint) PreMatchFlow(network string, destination netip.Addr) adapter.PreMatchAction {
 	return adapter.PreMatchFlow
 }
 
-func (t *Endpoint) PortAddresses() (netip.Addr, netip.Addr) {
+func (t *userspaceEndpoint) PortAddresses() (netip.Addr, netip.Addr) {
 	if !t.started.Load() {
 		return netip.Addr{}, netip.Addr{}
 	}
 	return t.server.TailscaleIPs()
 }
 
-func (t *Endpoint) PortMTU() uint32 {
+func (t *userspaceEndpoint) PortMTU() uint32 {
 	if t.systemInterface {
 		return t.systemInterfaceMTU
 	}
 	return uint32(tsTUN.DefaultTUNMTU())
 }
 
-func (t *Endpoint) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {
+func (t *userspaceEndpoint) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {
 	inet4Address, inet6Address := t.PortAddresses()
 	if destination.Addr() == inet4Address || destination.Addr() == inet6Address {
 		return tun.FlowVerdict{Action: tun.ActionAccept}
@@ -71,7 +71,7 @@ func (t *Endpoint) JudgeFlow(network uint8, source netip.AddrPort, destination n
 	return adapter.JudgeFlow(t.router, t.Tag(), t.Type(), network, source, destination, firstPacket)
 }
 
-func (t *Endpoint) NewDNSPacket(payload []byte, source M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {
+func (t *userspaceEndpoint) NewDNSPacket(payload []byte, source M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {
 	ctx := log.ContextWithNewID(t.ctx)
 	var metadata adapter.InboundContext
 	metadata.Inbound = t.Tag()
@@ -84,7 +84,7 @@ func (t *Endpoint) NewDNSPacket(payload []byte, source M.Socksaddr, destination 
 	t.router.HijackDNSPacket(ctx, payload, writer, metadata)
 }
 
-func (t *Endpoint) AttachReturn(returnPath tun.Return) error {
+func (t *userspaceEndpoint) AttachReturn(returnPath tun.Return) error {
 	t.returnAccess.Lock()
 	defer t.returnAccess.Unlock()
 	if t.returnPath == returnPath {
@@ -101,7 +101,7 @@ func (t *Endpoint) AttachReturn(returnPath tun.Return) error {
 	return nil
 }
 
-func (t *Endpoint) DetachReturn(returnPath tun.Return) error {
+func (t *userspaceEndpoint) DetachReturn(returnPath tun.Return) error {
 	t.returnAccess.Lock()
 	defer t.returnAccess.Unlock()
 	if t.returnPath == returnPath {
@@ -110,7 +110,7 @@ func (t *Endpoint) DetachReturn(returnPath tun.Return) error {
 	return nil
 }
 
-func (t *Endpoint) WritePackets(packets [][]byte) error {
+func (t *userspaceEndpoint) WritePackets(packets [][]byte) error {
 	if !t.started.Load() {
 		return E.New("Tailscale is not ready yet")
 	}
