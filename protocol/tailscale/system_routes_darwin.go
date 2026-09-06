@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -42,12 +43,45 @@ type systemRoute struct {
 	mtu     uint32
 }
 
+// routeOperationError records whether a routing request reached the kernel.
+// Once a complete request has been written, a missing acknowledgement cannot
+// prove that the operation did not take effect, so cleanup ownership must be
+// retained until a later delete or kernel reply resolves the uncertainty.
+type routeOperationError struct {
+	err            error
+	mayHaveApplied bool
+}
+
+func (e *routeOperationError) Error() string { return e.err.Error() }
+func (e *routeOperationError) Unwrap() error { return e.err }
+
+func newRouteOperationError(err error, mayHaveApplied bool) error {
+	if err == nil {
+		return nil
+	}
+	return &routeOperationError{err: err, mayHaveApplied: mayHaveApplied}
+}
+
+func routeOperationMayHaveApplied(err error) bool {
+	if err == nil {
+		return false
+	}
+	var operationError *routeOperationError
+	if errors.As(err, &operationError) {
+		return operationError.mayHaveApplied
+	}
+	// Test doubles and third-party route operators cannot communicate the
+	// operation phase, so conservatively retain ownership for unknown errors.
+	return true
+}
+
 type darwinSystemRouteManager struct {
 	name string
 	mtu  uint32
 
 	mu           sync.Mutex
 	routes       map[systemRouteFamily]systemRoute
+	ownedRoutes  map[systemRoute]struct{}
 	missingSince map[systemRouteFamily]time.Time
 	closing      bool
 	closed       bool
@@ -61,6 +95,7 @@ func newSystemRouteManager(name string, mtu uint32, _ string) systemRouteManager
 		name:         name,
 		mtu:          mtu,
 		routes:       make(map[systemRouteFamily]systemRoute),
+		ownedRoutes:  make(map[systemRoute]struct{}),
 		missingSince: make(map[systemRouteFamily]time.Time),
 		now:          time.Now,
 	}
@@ -77,14 +112,17 @@ func newSystemRouteManager(name string, mtu uint32, _ string) systemRouteManager
 // A missing address prevents a new route for that family; an existing route is
 // retained during convergence. This is important when a network has IPv4 only
 // or when Tailscale is still converging.
-func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) error {
+func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) (time.Duration, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed || r.closing {
-		return net.ErrClosed
+		return 0, net.ErrClosed
 	}
 	if r.routes == nil {
 		r.routes = make(map[systemRouteFamily]systemRoute)
+	}
+	if r.ownedRoutes == nil {
+		r.ownedRoutes = make(map[systemRoute]struct{})
 	}
 	if r.missingSince == nil {
 		r.missingSince = make(map[systemRouteFamily]time.Time)
@@ -92,11 +130,17 @@ func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) err
 	if r.now == nil {
 		r.now = time.Now
 	}
+	r.rememberCurrentRoutes()
 
-	wantIPv4 := enabled && ip4.Is4() && !ip4.IsUnspecified()
-	wantIPv6 := enabled && ip6.Is6() && !ip6.Is4In6() && !ip6.IsUnspecified()
+	if !enabled {
+		clear(r.missingSince)
+		return 0, r.removeAllOwnedRoutes()
+	}
+
+	wantIPv4 := ip4.Is4() && !ip4.IsUnspecified()
+	wantIPv6 := ip6.Is6() && !ip6.Is4In6() && !ip6.IsUnspecified()
 	var if4, if6 int
-	if enabled && (wantIPv4 || wantIPv6 || len(r.routes) > 0) {
+	if wantIPv4 || wantIPv6 || len(r.routes) > 0 {
 		indexes := r.indexes
 		if indexes == nil {
 			indexes = r.interfaceIndexes
@@ -104,11 +148,11 @@ func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) err
 		var err error
 		if4, if6, err = indexes()
 		if err != nil {
-			return fmt.Errorf("Tailscale interface %q index lookup: %w", r.name, err)
+			return 0, fmt.Errorf("Tailscale interface %q index lookup: %w", r.name, err)
 		}
 		if (wantIPv4 && (if4 <= 0 || if4 > 0xffff)) ||
 			(wantIPv6 && (if6 <= 0 || if6 > 0xffff)) {
-			return unix.EINVAL
+			return 0, unix.EINVAL
 		}
 	}
 
@@ -125,37 +169,25 @@ func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) err
 	}
 
 	var updateErr error
+	var nextUpdate time.Duration
 	for _, family := range []systemRouteFamily{systemRouteIPv4, systemRouteIPv6} {
 		old, hadOld := r.routes[family]
 		newRoute, wantsNew := want[family]
-
-		if !enabled {
-			delete(r.missingSince, family)
-			if !hadOld {
-				continue
-			}
-			if err := r.apply(unix.RTM_DELETE, old); err != nil && !isRouteGone(err) {
-				updateErr = errors.Join(updateErr, scopedRouteError(family, "delete", err))
-				continue
-			}
-			delete(r.routes, family)
-			continue
-		}
 
 		if !wantsNew {
 			if !hadOld {
 				delete(r.missingSince, family)
 				continue
 			}
-			// Never preserve a route across a utun replacement. A stale scope is
-			// worse than a brief missing family because it can blackhole traffic.
+			// Never preserve a route across a utun replacement. A stale
+			// scope is worse than a brief missing family because it can
+			// blackhole traffic.
 			currentIndex := indexes[family]
 			if currentIndex > 0 && old.index != currentIndex {
-				if err := r.apply(unix.RTM_DELETE, old); err != nil && !isRouteGone(err) {
+				if err := r.removeOwnedRoute(old); err != nil {
 					updateErr = errors.Join(updateErr, scopedRouteError(family, "delete stale", err))
 					continue
 				}
-				delete(r.routes, family)
 				delete(r.missingSince, family)
 				continue
 			}
@@ -164,14 +196,21 @@ func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) err
 				missingSince = r.now()
 				r.missingSince[family] = missingSince
 			}
-			if r.now().Sub(missingSince) < systemRouteHandoverGrace {
+			elapsed := r.now().Sub(missingSince)
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			if elapsed < systemRouteHandoverGrace {
+				remaining := systemRouteHandoverGrace - elapsed
+				if nextUpdate == 0 || remaining < nextUpdate {
+					nextUpdate = remaining
+				}
 				continue
 			}
-			if err := r.apply(unix.RTM_DELETE, old); err != nil && !isRouteGone(err) {
+			if err := r.removeOwnedRoute(old); err != nil {
 				updateErr = errors.Join(updateErr, scopedRouteError(family, "delete expired", err))
 				continue
 			}
-			delete(r.routes, family)
 			delete(r.missingSince, family)
 			continue
 		}
@@ -187,51 +226,61 @@ func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) err
 		}
 
 		if old == newRoute {
-			// Re-assert the route because configd or another route writer may
-			// have removed or altered the kernel entry without changing our
-			// desired state.
+			// Re-assert the route because configd or another route writer
+			// may have removed or altered the kernel entry without changing
+			// our desired state.
 			if err := r.apply(unix.RTM_CHANGE, newRoute); err != nil {
 				if !isRouteGone(err) {
 					updateErr = errors.Join(updateErr, scopedRouteError(family, "change", err))
 					continue
 				}
+				r.forgetOwnedRoute(old)
+				delete(r.routes, family)
 				if err = r.install(newRoute); err != nil {
 					updateErr = errors.Join(updateErr, scopedRouteError(family, "repair", err))
 					continue
 				}
+			} else {
+				r.rememberOwnedRoute(newRoute)
 			}
 			r.routes[family] = newRoute
 			continue
 		}
 
 		if old.index == newRoute.index {
-			// A same-scope address/MTU transition can be changed in place, which
-			// avoids the delete-first outage of the previous implementation.
+			// A same-scope address/MTU transition can be changed in place.
 			if err := r.apply(unix.RTM_CHANGE, newRoute); err != nil {
 				if !isRouteGone(err) {
+					if routeOperationMayHaveApplied(err) {
+						r.rememberOwnedRoute(newRoute)
+					}
 					updateErr = errors.Join(updateErr, scopedRouteError(family, "change", err))
 					continue
 				}
+				r.forgetOwnedRoute(old)
+				delete(r.routes, family)
 				if err = r.install(newRoute); err != nil {
 					updateErr = errors.Join(updateErr, scopedRouteError(family, "install replacement", err))
 					continue
 				}
+			} else {
+				r.rememberOwnedRoute(newRoute)
 			}
+			r.forgetOwnedRoute(old)
 			r.routes[family] = newRoute
 			continue
 		}
 
-		// A scope change cannot be performed atomically with RTM_CHANGE. Add the
-		// new working route first, then remove the old route. If old-route cleanup
-		// fails, roll back the new entry so bookkeeping and kernel state continue
-		// to agree on the last known working route.
+		// A scope change cannot be performed atomically with RTM_CHANGE.
+		// Add the replacement first. Both routes remain in ownedRoutes
+		// until old-route deletion and any rollback are definitive.
 		if err := r.install(newRoute); err != nil {
 			updateErr = errors.Join(updateErr, scopedRouteError(family, "install replacement", err))
 			continue
 		}
-		if err := r.apply(unix.RTM_DELETE, old); err != nil && !isRouteGone(err) {
-			rollbackErr := r.apply(unix.RTM_DELETE, newRoute)
-			if rollbackErr != nil && !isRouteGone(rollbackErr) {
+		if err := r.removeOwnedRoute(old); err != nil {
+			rollbackErr := r.removeOwnedRoute(newRoute)
+			if rollbackErr != nil {
 				updateErr = errors.Join(updateErr,
 					scopedRouteError(family, "delete old", err),
 					scopedRouteError(family, "rollback replacement", rollbackErr))
@@ -242,7 +291,7 @@ func (r *darwinSystemRouteManager) Update(enabled bool, ip4, ip6 netip.Addr) err
 		}
 		r.routes[family] = newRoute
 	}
-	return updateErr
+	return nextUpdate, updateErr
 }
 
 func (r *darwinSystemRouteManager) Close() error {
@@ -252,22 +301,68 @@ func (r *darwinSystemRouteManager) Close() error {
 		return nil
 	}
 	r.closing = true
-	var closeErr error
-	for _, family := range []systemRouteFamily{systemRouteIPv4, systemRouteIPv6} {
-		route, ok := r.routes[family]
-		if !ok {
-			continue
-		}
-		if err := r.apply(unix.RTM_DELETE, route); err != nil && !isRouteGone(err) {
-			closeErr = errors.Join(closeErr, scopedRouteError(family, "delete", err))
-			continue
-		}
-		delete(r.routes, family)
-	}
+	closeErr := r.removeAllOwnedRoutes()
 	if closeErr == nil {
 		r.closed = true
+		clear(r.missingSince)
 	}
 	return closeErr
+}
+
+func (r *darwinSystemRouteManager) rememberCurrentRoutes() {
+	for _, route := range r.routes {
+		r.rememberOwnedRoute(route)
+	}
+}
+
+func (r *darwinSystemRouteManager) rememberOwnedRoute(route systemRoute) {
+	if r.ownedRoutes == nil {
+		r.ownedRoutes = make(map[systemRoute]struct{})
+	}
+	r.ownedRoutes[route] = struct{}{}
+}
+
+func (r *darwinSystemRouteManager) forgetOwnedRoute(route systemRoute) {
+	delete(r.ownedRoutes, route)
+}
+
+func (r *darwinSystemRouteManager) removeOwnedRoute(route systemRoute) error {
+	err := r.apply(unix.RTM_DELETE, route)
+	if err != nil && !isRouteGone(err) {
+		return err
+	}
+	r.forgetOwnedRoute(route)
+	if current, loaded := r.routes[route.family]; loaded && current == route {
+		delete(r.routes, route.family)
+	}
+	return nil
+}
+
+func (r *darwinSystemRouteManager) removeAllOwnedRoutes() error {
+	r.rememberCurrentRoutes()
+	routes := make([]systemRoute, 0, len(r.ownedRoutes))
+	for route := range r.ownedRoutes {
+		routes = append(routes, route)
+	}
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i].family != routes[j].family {
+			return routes[i].family < routes[j].family
+		}
+		if routes[i].index != routes[j].index {
+			return routes[i].index < routes[j].index
+		}
+		if compared := routes[i].gateway.Compare(routes[j].gateway); compared != 0 {
+			return compared < 0
+		}
+		return routes[i].mtu < routes[j].mtu
+	})
+	var cleanupErr error
+	for _, route := range routes {
+		if err := r.removeOwnedRoute(route); err != nil {
+			cleanupErr = errors.Join(cleanupErr, scopedRouteError(route.family, "delete", err))
+		}
+	}
+	return cleanupErr
 }
 
 func (r *darwinSystemRouteManager) apply(messageType int, route systemRoute) error {
@@ -279,21 +374,49 @@ func (r *darwinSystemRouteManager) apply(messageType int, route systemRoute) err
 
 func (r *darwinSystemRouteManager) install(route systemRoute) error {
 	err := r.apply(unix.RTM_ADD, route)
-	if !errors.Is(err, unix.EEXIST) {
+	switch {
+	case err == nil:
+		r.rememberOwnedRoute(route)
+		return nil
+	case errors.Is(err, unix.EEXIST):
+		// The route exists and is adopted only after repairing its MTU
+		// and interface address below. Keep cleanup ownership even when
+		// that repair returns an error.
+		r.rememberOwnedRoute(route)
+	default:
+		if routeOperationMayHaveApplied(err) {
+			r.rememberOwnedRoute(route)
+		}
 		return err
 	}
-	// A route may have survived a previous process or the legacy route
-	// supervisor. Change it in place so the MTU metric is corrected instead of
-	// blindly adopting a route that still advertises the physical interface's
-	// MSS. If the owner removes it between ADD and CHANGE, retry the bounded
-	// add/change sequence once rather than leaving a gap until the next event.
+
 	err = r.apply(unix.RTM_CHANGE, route)
+	if err == nil {
+		return nil
+	}
 	if !isRouteGone(err) {
 		return err
 	}
+	r.forgetOwnedRoute(route)
+
+	// The route disappeared between ADD and CHANGE. Retry the bounded
+	// add/change sequence once rather than leaving a gap until another
+	// external event.
 	err = r.apply(unix.RTM_ADD, route)
+	if err == nil {
+		r.rememberOwnedRoute(route)
+		return nil
+	}
 	if errors.Is(err, unix.EEXIST) {
+		r.rememberOwnedRoute(route)
 		err = r.apply(unix.RTM_CHANGE, route)
+		if isRouteGone(err) {
+			r.forgetOwnedRoute(route)
+		}
+		return err
+	}
+	if routeOperationMayHaveApplied(err) {
+		r.rememberOwnedRoute(route)
 	}
 	return err
 }
@@ -301,7 +424,7 @@ func (r *darwinSystemRouteManager) install(route systemRoute) error {
 func (r *darwinSystemRouteManager) interfaceIndexes() (int, int, error) {
 	interfaceInfo, err := net.InterfaceByName(r.name)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("%w for %q: %v", errSystemRouteInterfacePending, r.name, err)
 	}
 	// Both families use the same utun interface index. Keeping the two
 	// return values makes the desired route state explicit and leaves room
@@ -346,15 +469,15 @@ func executeScopedRoute(messageType int, r systemRoute) error {
 	seq := int(systemRouteMessageSeq.Add(1))
 	request, err := marshalScopedRouteMessage(messageType, r, id, seq)
 	if err != nil {
-		return err
+		return newRouteOperationError(err, false)
 	}
 	socketFD, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, 0)
 	if err != nil {
-		return err
+		return newRouteOperationError(err, false)
 	}
 	defer unix.Close(socketFD)
 	if err = unix.SetsockoptTimeval(socketFD, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 1}); err != nil {
-		return err
+		return newRouteOperationError(err, false)
 	}
 	var n int
 	for {
@@ -364,21 +487,21 @@ func executeScopedRoute(messageType int, r systemRoute) error {
 			continue
 		}
 		if writeErr != nil {
-			return writeErr
+			return newRouteOperationError(writeErr, n > 0)
 		}
 		break
 	}
 	if n != len(request) {
 		// A routing message is atomic. Sending the remainder as a second
 		// write would turn it into a malformed independent request.
-		return io.ErrShortWrite
+		return newRouteOperationError(io.ErrShortWrite, n > 0)
 	}
 
 	buffer := make([]byte, 4096)
 	deadline := time.Now().Add(scopedRouteReplyTimeout)
 	for {
 		if !time.Now().Before(deadline) {
-			return os.ErrDeadlineExceeded
+			return newRouteOperationError(os.ErrDeadlineExceeded, true)
 		}
 		n, readErr := unix.Read(socketFD, buffer)
 		if readErr != nil {
@@ -387,22 +510,22 @@ func executeScopedRoute(messageType int, r systemRoute) error {
 			}
 			if errors.Is(readErr, unix.EAGAIN) || errors.Is(readErr, unix.EWOULDBLOCK) {
 				if time.Now().After(deadline) {
-					return os.ErrDeadlineExceeded
+					return newRouteOperationError(os.ErrDeadlineExceeded, true)
 				}
 				continue
 			}
-			return readErr
+			return newRouteOperationError(readErr, true)
 		}
 		if n == 0 {
 			if time.Now().After(deadline) {
-				return os.ErrDeadlineExceeded
+				return newRouteOperationError(os.ErrDeadlineExceeded, true)
 			}
 			continue
 		}
 		messages, parseErr := route.ParseRIB(route.RIBTypeRoute, buffer[:n])
 		if parseErr != nil {
 			if time.Now().After(deadline) {
-				return parseErr
+				return newRouteOperationError(parseErr, true)
 			}
 			continue
 		}
@@ -411,10 +534,10 @@ func executeScopedRoute(messageType int, r systemRoute) error {
 			if !ok || reply.ID != id || reply.Seq != seq {
 				continue
 			}
-			return reply.Err
+			return newRouteOperationError(reply.Err, false)
 		}
 		if time.Now().After(deadline) {
-			return os.ErrDeadlineExceeded
+			return newRouteOperationError(os.ErrDeadlineExceeded, true)
 		}
 	}
 }

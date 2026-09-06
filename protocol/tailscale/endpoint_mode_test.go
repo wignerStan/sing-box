@@ -22,7 +22,9 @@ type endpointTestRouteManager struct {
 	closeCall int
 }
 
-func (m *endpointTestRouteManager) Update(bool, netip.Addr, netip.Addr) error { return nil }
+func (m *endpointTestRouteManager) Update(bool, netip.Addr, netip.Addr) (time.Duration, error) {
+	return 0, nil
+}
 
 func (m *endpointTestRouteManager) Close() error {
 	m.mu.Lock()
@@ -169,13 +171,13 @@ func TestRunSystemRouteUpdaterRetriesAndWakesOnUpdate(t *testing.T) {
 	done := make(chan struct{})
 	var attempt int
 	go func() {
-		runSystemRouteUpdater(updates, stop, func() (uint64, error) {
+		runSystemRouteUpdater(updates, stop, func() (uint64, time.Duration, error) {
 			attempt++
 			attempts <- attempt
 			if attempt < 3 {
-				return uint64(attempt), syscall.ENXIO
+				return uint64(attempt), 0, syscall.ENXIO
 			}
-			return uint64(attempt), nil
+			return uint64(attempt), 0, nil
 		}, func(uint64, error) {}, time.Hour, time.Hour)
 		close(done)
 	}()
@@ -209,9 +211,9 @@ func TestRunSystemRouteUpdaterStopsOnPermanentError(t *testing.T) {
 	stop := make(chan struct{})
 	completed := make(chan error, 1)
 	attempts := 0
-	go runSystemRouteUpdater(updates, stop, func() (uint64, error) {
+	go runSystemRouteUpdater(updates, stop, func() (uint64, time.Duration, error) {
 		attempts++
-		return 7, syscall.EPERM
+		return 7, 0, syscall.EPERM
 	}, func(generation uint64, err error) {
 		if generation != 7 {
 			t.Errorf("generation = %d, want 7", generation)
@@ -242,9 +244,9 @@ func TestRunSystemRouteUpdaterStopsDuringRetry(t *testing.T) {
 	entered := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		runSystemRouteUpdater(updates, stop, func() (uint64, error) {
+		runSystemRouteUpdater(updates, stop, func() (uint64, time.Duration, error) {
 			close(entered)
-			return 1, syscall.ENXIO
+			return 1, 0, syscall.ENXIO
 		}, func(uint64, error) {}, time.Hour, time.Hour)
 		close(done)
 	}()
@@ -284,5 +286,66 @@ func TestSystemRouteUpdaterConcurrentStartStop(t *testing.T) {
 	defer endpoint.systemRouteMu.Unlock()
 	if endpoint.systemRouteUpdate != nil || endpoint.systemRouteStop != nil {
 		t.Fatal("route updater remained active after concurrent start/stop")
+	}
+}
+func TestRunSystemRouteUpdaterRunsDeferredReconciliation(t *testing.T) {
+	updates := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	stopUpdater := func() { stopOnce.Do(func() { close(stop) }) }
+	t.Cleanup(stopUpdater)
+	attempts := make(chan int, 2)
+	completions := make(chan uint64, 2)
+	done := make(chan struct{})
+	attempt := 0
+	go func() {
+		runSystemRouteUpdater(updates, stop, func() (uint64, time.Duration, error) {
+			attempt++
+			attempts <- attempt
+			if attempt == 1 {
+				return 9, 10 * time.Millisecond, nil
+			}
+			return 9, 0, nil
+		}, func(generation uint64, err error) {
+			if err != nil {
+				t.Errorf("completion error = %v", err)
+			}
+			completions <- generation
+		}, time.Hour, time.Hour)
+		close(done)
+	}()
+	updates <- struct{}{}
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-attempts:
+			if got != want {
+				t.Fatalf("attempt = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("deferred attempt %d did not run", want)
+		}
+	}
+	select {
+	case generation := <-completions:
+		if generation != 9 {
+			t.Fatalf("completed generation = %d, want 9", generation)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successful route generation was not completed before deferred cleanup")
+	}
+	stopUpdater()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("route updater did not stop")
+	}
+}
+
+func TestSystemRouteErrorClassificationRequiresAllLeavesTransient(t *testing.T) {
+	if !isTransientSystemRouteError(errors.Join(syscall.ENXIO, syscall.EAGAIN)) {
+		t.Fatal("all-transient joined error was classified as permanent")
+	}
+	if isTransientSystemRouteError(errors.Join(syscall.ENETUNREACH, syscall.EPERM)) {
+		t.Fatal("permanent EPERM was hidden by a transient sibling")
 	}
 }

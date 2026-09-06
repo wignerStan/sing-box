@@ -2,7 +2,10 @@
 
 package tailscale
 
-import "net/netip"
+import (
+	"net/netip"
+	"time"
+)
 
 const systemRouteRequiresAddress = false
 
@@ -16,6 +19,8 @@ func newSystemRouteManager(_ string, _ uint32, _ string) systemRouteManager {
 	return unsupportedSystemRouteManager{}
 }
 
-func (unsupportedSystemRouteManager) Update(bool, netip.Addr, netip.Addr) error { return nil }
+func (unsupportedSystemRouteManager) Update(bool, netip.Addr, netip.Addr) (time.Duration, error) {
+	return 0, nil
+}
 
 func (unsupportedSystemRouteManager) Close() error { return nil }
