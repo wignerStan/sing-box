@@ -1,0 +1,67 @@
+name: apply Tailscale system route follow-up
+
+on:
+  push:
+    branches:
+      - automation/tailscale-system-route-followup
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply follow-up
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/apply_tailscale_system_route_followup.py
+          go mod edit -replace=github.com/sagernet/tailscale=github.com/wignerStan/tailscale@v0.0.0-20260906081838-3ed657099ca2
+          go mod tidy
+          gofmt -w \
+            protocol/tailscale/endpoint.go \
+            protocol/tailscale/endpoint_mode_test.go \
+            protocol/tailscale/system_routes.go \
+            protocol/tailscale/system_routes_stub.go \
+            protocol/tailscale/system_routes_darwin.go \
+            protocol/tailscale/system_routes_darwin_test.go
+          git diff --check
+
+      - name: Native Darwin tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -count=1 -tags with_gvisor ./protocol/tailscale
+          go test -count=1 -race -tags with_gvisor ./protocol/tailscale
+          go vet -tags with_gvisor ./protocol/tailscale
+
+      - name: Cross-platform compile checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -tags with_gvisor ./protocol/tailscale -o /tmp/tailscale-linux.test
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go test -c -tags with_gvisor ./protocol/tailscale -o /tmp/tailscale-windows.test.exe
+
+      - name: Publish validated commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/apply_tailscale_system_route_followup.py
+          git rm .github/workflows/apply-tailscale-system-route-followup.yml
+          git add -A
+          git commit -s -m "fix(tailscale): make system exit routes transactional"
+          git push origin HEAD:${{ github.ref_name }}
