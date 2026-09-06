@@ -80,8 +80,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/apply_tailscale_system_route_followup.py
-          git rm .github/workflows/apply-tailscale-system-route-followup.yml
+          git rm -f .github/apply_tailscale_system_route_followup.py
+          git rm -f .github/workflows/apply-tailscale-system-route-followup.yml
           git add -A
           git commit -s -m "fix(tailscale): make system exit routes transactional"
           git push origin HEAD:${{ github.ref_name }}
