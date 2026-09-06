@@ -153,7 +153,6 @@ type Endpoint struct {
 	systemRouteGeneration uint64
 	systemRouteWaiters    map[uint64]chan error
 	exitNodeUpdateMu      sync.Mutex
-	exitNodeActive        atomic.Bool
 	globalHooksAcquired   bool
 	userspaceHandler      tun.Handler
 	fallbackTCPCloser     func()
@@ -286,7 +285,6 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		systemInterfaceMTU:         options.SystemInterfaceMTU,
 		keyAuth:                    options.AuthKey != "",
 	}
-	tailscaleEndpoint.exitNodeActive.Store(false)
 	if options.SystemInterface {
 		return tailscaleEndpoint, nil
 	}
@@ -438,6 +436,9 @@ func (t *Endpoint) start() (retErr error) {
 		}
 		t.systemTunDevice = wgTunDevice
 		t.systemDialer = systemDialer
+		t.server.DataPlaneDial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			return systemDialer.DialContext(ctx, network, M.ParseSocksaddr(address))
+		}
 		t.systemRouteMu.Lock()
 		t.systemRouteManager = newSystemRouteManager(tunName, mtu, t.server.Dir)
 		t.systemRouteMu.Unlock()
@@ -666,8 +667,6 @@ func (t *Endpoint) watchState() {
 				return true
 			}
 			status := localBackend.StatusWithoutPeers()
-			prefs := localBackend.Prefs()
-			t.exitNodeActive.Store(prefs.ExitNodeID() != "" || prefs.ExitNodeIP().IsValid() || prefs.AutoExitNode().IsSet())
 			t.requestSystemRouteUpdate()
 			running = status.BackendState == ipn.Running.String()
 			switch status.BackendState {
@@ -770,7 +769,6 @@ func (t *Endpoint) applyExitNode() error {
 	if err != nil {
 		return err
 	}
-	t.exitNodeActive.Store(t.exitNode != "")
 	ctx, cancel := context.WithTimeout(t.ctx, systemRouteApplyTimeout)
 	defer cancel()
 	if err = t.requestSystemRouteUpdateAndWait(ctx); err != nil {
@@ -821,7 +819,6 @@ func (t *Endpoint) SetTailscaleExitNode(ctx context.Context, stableID string) er
 	if err != nil {
 		return E.Cause(err, "update prefs")
 	}
-	t.exitNodeActive.Store(stableID != "")
 	if err = t.requestSystemRouteUpdateAndWait(ctx); err != nil {
 		return E.Cause(err, "reconcile Tailscale system exit route")
 	}
@@ -859,7 +856,6 @@ func (t *Endpoint) Logout(ctx context.Context) error {
 	if err != nil {
 		return E.Cause(err, "start interactive login")
 	}
-	t.exitNodeActive.Store(false)
 	if err = t.requestSystemRouteUpdateAndWait(ctx); err != nil {
 		return E.Cause(err, "remove Tailscale system exit route")
 	}
@@ -1182,34 +1178,32 @@ func (t *Endpoint) onReconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCf
 }
 
 func (t *Endpoint) updateSystemRoutes() {
-	_, _ = t.updateSystemRoutesResult()
+	_, _, _ = t.updateSystemRoutesResult()
 }
 
-func (t *Endpoint) updateSystemRoutesResult() (uint64, error) {
+func (t *Endpoint) updateSystemRoutesResult() (uint64, time.Duration, error) {
 	t.systemRouteMu.Lock()
 	generation := t.systemRouteGeneration
 	manager := t.systemRouteManager
 	t.systemRouteMu.Unlock()
 	if manager == nil || t.server == nil || !t.serverStarted.Load() {
-		return generation, nil
+		return generation, 0, nil
 	}
 	ip4, ip6 := t.server.TailscaleIPs()
-	enabled := t.exitNodeActive.Load()
-	if systemRouteRequiresAddress && enabled && !validSystemRouteAddress(ip4) && !validSystemRouteAddress(ip6) {
-		if err := manager.Update(enabled, ip4, ip6); err != nil {
-			return generation, err
-		}
-		return generation, errSystemRouteAddressPending
-	}
-	if err := manager.Update(enabled, ip4, ip6); err != nil {
+	enabled := t.systemExitNodeEnabled()
+	retryAfter, err := manager.Update(enabled, ip4, ip6)
+	if err != nil {
 		if isTransientSystemRouteError(err) {
 			t.logger.Debug("update Tailscale system exit routes: ", err)
 		} else {
 			t.logger.Warn("update Tailscale system exit routes: ", err)
 		}
-		return generation, err
+		return generation, retryAfter, err
 	}
-	return generation, nil
+	if systemRouteRequiresAddress && enabled && !validSystemRouteAddress(ip4) && !validSystemRouteAddress(ip6) {
+		return generation, retryAfter, errSystemRouteAddressPending
+	}
+	return generation, retryAfter, nil
 }
 
 func validSystemRouteAddress(address netip.Addr) bool {
@@ -1250,7 +1244,7 @@ func (t *Endpoint) startSystemRouteUpdater() {
 func runSystemRouteUpdater(
 	updates <-chan struct{},
 	stop <-chan struct{},
-	update func() (uint64, error),
+	update func() (uint64, time.Duration, error),
 	complete func(uint64, error),
 	retryMinDelay time.Duration,
 	retryMaxDelay time.Duration,
@@ -1271,22 +1265,34 @@ func runSystemRouteUpdater(
 			return
 		}
 		retryDelay := retryMinDelay
+	retryLoop:
 		for {
 			select {
 			case <-stop:
 				return
 			default:
 			}
-			generation, err := update()
+			generation, deferredDelay, err := update()
+			transient := err != nil && isTransientSystemRouteError(err)
 			if err == nil {
 				complete(generation, nil)
-				break
-			}
-			if !isTransientSystemRouteError(err) {
+				if deferredDelay <= 0 {
+					break retryLoop
+				}
+				retryDelay = retryMinDelay
+			} else if !transient {
 				complete(generation, err)
-				break
+				if deferredDelay <= 0 {
+					break retryLoop
+				}
+				retryDelay = retryMinDelay
 			}
-			timer := time.NewTimer(retryDelay)
+
+			waitDelay := retryDelay
+			if deferredDelay > 0 && (err == nil || !transient || deferredDelay < waitDelay) {
+				waitDelay = deferredDelay
+			}
+			timer := time.NewTimer(waitDelay)
 			select {
 			case _, loaded := <-updates:
 				stopSystemRouteRetryTimer(timer)
@@ -1299,7 +1305,7 @@ func runSystemRouteUpdater(
 				stopSystemRouteRetryTimer(timer)
 				return
 			case <-timer.C:
-				if retryDelay < retryMaxDelay {
+				if transient && waitDelay == retryDelay && retryDelay < retryMaxDelay {
 					retryDelay *= 2
 					if retryDelay > retryMaxDelay {
 						retryDelay = retryMaxDelay
