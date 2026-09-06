@@ -27,6 +27,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path('.github/apply_tailscale_system_route_followup.py')
+          text = path.read_text()
+          old = r'if re.search(r"(?m)(?:if\s+)?err := manager\.Update\(", darwin_test_text):'
+          new = r'if re.search(r"(?m)^\s*(?:if\s+)?err := manager\.Update\(", darwin_test_text):'
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one stale Update assertion')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 .github/apply_tailscale_system_route_followup.py
           go mod edit -replace=github.com/sagernet/tailscale=github.com/wignerStan/tailscale@v0.0.0-20260906081838-3ed657099ca2
           go mod tidy
