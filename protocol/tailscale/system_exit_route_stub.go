@@ -13,14 +13,14 @@ const systemRouteRequiresAddress = false
 // where the endpoint's utun must use an interface-scoped route. Other
 // platforms retain the router behavior supplied by their native Tailscale
 // integration; this no-op keeps the endpoint buildable there.
-type unsupportedSystemRouteManager struct{}
+type unsupportedSystemExitRouteReconciler struct{}
 
-func newSystemRouteManager(_ string, _ uint32, _ string) systemRouteManager {
-	return unsupportedSystemRouteManager{}
+func newSystemExitRouteReconciler(_ string, _ uint32, _ string) systemExitRouteReconciler {
+	return unsupportedSystemExitRouteReconciler{}
 }
 
-func (unsupportedSystemRouteManager) Update(bool, netip.Addr, netip.Addr) (time.Duration, error) {
+func (unsupportedSystemExitRouteReconciler) Update(bool, netip.Addr, netip.Addr) (time.Duration, error) {
 	return 0, nil
 }
 
-func (unsupportedSystemRouteManager) Close() error { return nil }
+func (unsupportedSystemExitRouteReconciler) Close() error { return nil }

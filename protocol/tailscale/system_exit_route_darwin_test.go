@@ -59,8 +59,8 @@ type fakeSystemRouteCall struct {
 	route systemRoute
 }
 
-func newFakeSystemRouteManager(indexes func() (int, int, error), op func(int, systemRoute) error) *darwinSystemRouteManager {
-	manager := &darwinSystemRouteManager{
+func newFakeSystemExitRouteReconciler(indexes func() (int, int, error), op func(int, systemRoute) error) *darwinSystemExitRouteReconciler {
+	manager := &darwinSystemExitRouteReconciler{
 		name:         "utun-test",
 		mtu:          1280,
 		routes:       make(map[systemRouteFamily]systemRoute),
@@ -73,10 +73,10 @@ func newFakeSystemRouteManager(indexes func() (int, int, error), op func(int, sy
 	return manager
 }
 
-func TestNewSystemRouteManagerInitializesProductionDependencies(t *testing.T) {
-	manager, ok := newSystemRouteManager("utun-test", 1280, t.TempDir()).(*darwinSystemRouteManager)
+func TestNewSystemExitRouteReconcilerInitializesProductionDependencies(t *testing.T) {
+	manager, ok := newSystemExitRouteReconciler("utun-test", 1280, t.TempDir()).(*darwinSystemExitRouteReconciler)
 	if !ok {
-		t.Fatalf("manager type = %T, want *darwinSystemRouteManager", manager)
+		t.Fatalf("manager type = %T, want *darwinSystemExitRouteReconciler", manager)
 	}
 	if manager.name != "utun-test" || manager.mtu != 1280 {
 		t.Fatalf("manager = {name:%q mtu:%d}, want {name:%q mtu:%d}", manager.name, manager.mtu, "utun-test", 1280)
@@ -86,11 +86,11 @@ func TestNewSystemRouteManagerInitializesProductionDependencies(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerReconcilesFamilies(t *testing.T) {
+func TestSystemExitRouteReconcilerReconcilesFamilies(t *testing.T) {
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
 	var calls []fakeSystemRouteCall
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		return nil
 	})
@@ -152,12 +152,12 @@ func TestSystemRouteManagerReconcilesFamilies(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerRotatesAddressInterfaceAndMTU(t *testing.T) {
+func TestSystemExitRouteReconcilerRotatesAddressInterfaceAndMTU(t *testing.T) {
 	oldIP := netip.MustParseAddr("100.71.1.1")
 	newIP := netip.MustParseAddr("100.72.2.2")
 	index := 17
 	var calls []fakeSystemRouteCall
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		return nil
 	})
@@ -182,11 +182,11 @@ func TestSystemRouteManagerRotatesAddressInterfaceAndMTU(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerChangesAddressAndMTUInPlace(t *testing.T) {
+func TestSystemExitRouteReconcilerChangesAddressAndMTUInPlace(t *testing.T) {
 	oldIP := netip.MustParseAddr("100.71.1.1")
 	newIP := netip.MustParseAddr("100.72.2.2")
 	var calls []fakeSystemRouteCall
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		return nil
 	})
@@ -206,13 +206,13 @@ func TestSystemRouteManagerChangesAddressAndMTUInPlace(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerPreservesOldRouteWhenReplacementInstallFails(t *testing.T) {
+func TestSystemExitRouteReconcilerPreservesOldRouteWhenReplacementInstallFails(t *testing.T) {
 	oldIP := netip.MustParseAddr("100.71.1.1")
 	newIP := netip.MustParseAddr("100.72.2.2")
 	index := 17
 	sentinel := errors.New("install replacement failed")
 	var calls []fakeSystemRouteCall
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		if typ == unix.RTM_ADD && route.index == 19 {
 			return sentinel
@@ -237,7 +237,7 @@ func TestSystemRouteManagerPreservesOldRouteWhenReplacementInstallFails(t *testi
 	}
 }
 
-func TestSystemRouteManagerRollsBackReplacementWhenOldDeleteFails(t *testing.T) {
+func TestSystemExitRouteReconcilerRollsBackReplacementWhenOldDeleteFails(t *testing.T) {
 	oldIP := netip.MustParseAddr("100.71.1.1")
 	newIP := netip.MustParseAddr("100.72.2.2")
 	index := 17
@@ -245,7 +245,7 @@ func TestSystemRouteManagerRollsBackReplacementWhenOldDeleteFails(t *testing.T) 
 	var oldRoute systemRoute
 	var newRoute systemRoute
 	var calls []fakeSystemRouteCall
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		if typ == unix.RTM_DELETE && route == oldRoute && route.index == 17 {
 			return sentinel
@@ -274,11 +274,11 @@ func TestSystemRouteManagerRollsBackReplacementWhenOldDeleteFails(t *testing.T) 
 	}
 }
 
-func TestSystemRouteManagerExpiresMissingFamilyAfterGrace(t *testing.T) {
+func TestSystemExitRouteReconcilerExpiresMissingFamilyAfterGrace(t *testing.T) {
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
 	now := time.Unix(100, 0)
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error { return nil })
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error { return nil })
 	manager.now = func() time.Time { return now }
 	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
@@ -298,11 +298,11 @@ func TestSystemRouteManagerExpiresMissingFamilyAfterGrace(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerDropsMissingFamilyOnInterfaceReplacement(t *testing.T) {
+func TestSystemExitRouteReconcilerDropsMissingFamilyOnInterfaceReplacement(t *testing.T) {
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
 	index := 17
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(int, systemRoute) error { return nil })
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return index, index, nil }, func(int, systemRoute) error { return nil })
 	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
 	}
@@ -315,10 +315,10 @@ func TestSystemRouteManagerDropsMissingFamilyOnInterfaceReplacement(t *testing.T
 	}
 }
 
-func TestSystemRouteManagerRepairsExistingRoute(t *testing.T) {
+func TestSystemExitRouteReconcilerRepairsExistingRoute(t *testing.T) {
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	var calls []fakeSystemRouteCall
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		if typ == unix.RTM_ADD {
 			return unix.EEXIST
@@ -338,9 +338,9 @@ func TestSystemRouteManagerRepairsExistingRoute(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerDoesNotAdoptUnrepairableRoute(t *testing.T) {
+func TestSystemExitRouteReconcilerDoesNotAdoptUnrepairableRoute(t *testing.T) {
 	sentinel := errors.New("change failed")
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
 		if typ == unix.RTM_ADD {
 			return unix.EEXIST
 		}
@@ -355,11 +355,11 @@ func TestSystemRouteManagerDoesNotAdoptUnrepairableRoute(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerPreservesSuccessfulFamily(t *testing.T) {
+func TestSystemExitRouteReconcilerPreservesSuccessfulFamily(t *testing.T) {
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
 	failIPv6 := true
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
 		if failIPv6 && typ == unix.RTM_ADD && route.family == systemRouteIPv6 {
 			return unix.ENXIO
 		}
@@ -383,8 +383,8 @@ func TestSystemRouteManagerPreservesSuccessfulFamily(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerReportsBothFamilyErrors(t *testing.T) {
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+func TestSystemExitRouteReconcilerReportsBothFamilyErrors(t *testing.T) {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
 		if typ != unix.RTM_ADD {
 			return nil
 		}
@@ -402,11 +402,11 @@ func TestSystemRouteManagerReportsBothFamilyErrors(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerRejectsInvalidInterfaceIndex(t *testing.T) {
+func TestSystemExitRouteReconcilerRejectsInvalidInterfaceIndex(t *testing.T) {
 	for _, index := range []int{0, -1, 0x10000} {
 		t.Run(fmt.Sprintf("index-%d", index), func(t *testing.T) {
 			called := false
-			manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(int, systemRoute) error {
+			manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return index, index, nil }, func(int, systemRoute) error {
 				called = true
 				return nil
 			})
@@ -421,11 +421,11 @@ func TestSystemRouteManagerRejectsInvalidInterfaceIndex(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerRetriesReplaceRace(t *testing.T) {
+func TestSystemExitRouteReconcilerRetriesReplaceRace(t *testing.T) {
 	var calls []int
 	changeCount := 0
 	addCount := 0
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
 		calls = append(calls, typ)
 		switch typ {
 		case unix.RTM_ADD:
@@ -452,10 +452,10 @@ func TestSystemRouteManagerRetriesReplaceRace(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerRetriesReplaceRaceWithSecondConflict(t *testing.T) {
+func TestSystemExitRouteReconcilerRetriesReplaceRaceWithSecondConflict(t *testing.T) {
 	var calls []int
 	changeCount := 0
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
 		calls = append(calls, typ)
 		switch typ {
 		case unix.RTM_ADD:
@@ -480,11 +480,11 @@ func TestSystemRouteManagerRetriesReplaceRaceWithSecondConflict(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerPreservesStateOnDeleteFailure(t *testing.T) {
+func TestSystemExitRouteReconcilerPreservesStateOnDeleteFailure(t *testing.T) {
 	sentinel := errors.New("delete failed")
 	failDelete := true
 	var calls []fakeSystemRouteCall
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
 		calls = append(calls, fakeSystemRouteCall{typ: typ, route: route})
 		if typ == unix.RTM_DELETE && failDelete {
 			return sentinel
@@ -513,9 +513,9 @@ func TestSystemRouteManagerPreservesStateOnDeleteFailure(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerCloseRetriesFailedDelete(t *testing.T) {
+func TestSystemExitRouteReconcilerCloseRetriesFailedDelete(t *testing.T) {
 	failIPv4Delete := true
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
 		if typ == unix.RTM_DELETE && route.family == systemRouteIPv4 && failIPv4Delete {
 			return unix.EPERM
 		}
@@ -551,8 +551,8 @@ func TestSystemRouteManagerCloseRetriesFailedDelete(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerMissingInterface(t *testing.T) {
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 0, 0, unix.ENXIO }, func(int, systemRoute) error {
+func TestSystemExitRouteReconcilerMissingInterface(t *testing.T) {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 0, 0, unix.ENXIO }, func(int, systemRoute) error {
 		return unix.ENXIO
 	})
 	if _, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{}); !errors.Is(err, unix.ENXIO) {
@@ -567,9 +567,9 @@ func TestSystemRouteManagerMissingInterface(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerNoAddressesDoesNotNeedInterface(t *testing.T) {
+func TestSystemExitRouteReconcilerNoAddressesDoesNotNeedInterface(t *testing.T) {
 	called := false
-	manager := newFakeSystemRouteManager(func() (int, int, error) {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) {
 		called = true
 		return 0, 0, unix.ENXIO
 	}, func(int, systemRoute) error {
@@ -595,10 +595,10 @@ func TestSystemRouteManagerNoAddressesDoesNotNeedInterface(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerRefreshesMissingRoute(t *testing.T) {
+func TestSystemExitRouteReconcilerRefreshesMissingRoute(t *testing.T) {
 	missing := true
 	var calls []int
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
 		calls = append(calls, typ)
 		if typ == unix.RTM_CHANGE && missing {
 			missing = false
@@ -621,9 +621,9 @@ func TestSystemRouteManagerRefreshesMissingRoute(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerRefreshErrorPreservesBookkeeping(t *testing.T) {
+func TestSystemExitRouteReconcilerRefreshErrorPreservesBookkeeping(t *testing.T) {
 	sentinel := errors.New("refresh failed")
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, _ systemRoute) error {
 		if typ == unix.RTM_CHANGE {
 			return sentinel
 		}
@@ -641,10 +641,10 @@ func TestSystemRouteManagerRefreshErrorPreservesBookkeeping(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerConcurrentLifecycle(t *testing.T) {
+func TestSystemExitRouteReconcilerConcurrentLifecycle(t *testing.T) {
 	var callsMu sync.Mutex
 	var calls int
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error {
 		callsMu.Lock()
 		calls++
 		callsMu.Unlock()
@@ -806,11 +806,11 @@ func FuzzScopedRouteMessageValidation(f *testing.F) {
 		_, _ = marshalScopedRouteMessage(int(typ), route, 23, 29)
 	})
 }
-func TestSystemRouteManagerReturnsMissingFamilyDeadline(t *testing.T) {
+func TestSystemExitRouteReconcilerReturnsMissingFamilyDeadline(t *testing.T) {
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")
 	now := time.Unix(100, 0)
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error { return nil })
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(int, systemRoute) error { return nil })
 	manager.now = func() time.Time { return now }
 	if _, err := manager.Update(true, ip4, ip6); err != nil {
 		t.Fatal(err)
@@ -835,12 +835,12 @@ func TestSystemRouteManagerReturnsMissingFamilyDeadline(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerCleansUncertainInstall(t *testing.T) {
+func TestSystemExitRouteReconcilerCleansUncertainInstall(t *testing.T) {
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	kernelRoutes := make(map[systemRoute]bool)
 	acknowledgementLost := true
 	sentinel := errors.New("route acknowledgement lost")
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return 17, 17, nil }, func(typ int, route systemRoute) error {
 		switch typ {
 		case unix.RTM_ADD:
 			kernelRoutes[route] = true
@@ -867,14 +867,14 @@ func TestSystemRouteManagerCleansUncertainInstall(t *testing.T) {
 	}
 }
 
-func TestSystemRouteManagerRetainsBothRoutesAfterFailedRollback(t *testing.T) {
+func TestSystemExitRouteReconcilerRetainsBothRoutesAfterFailedRollback(t *testing.T) {
 	oldIP := netip.MustParseAddr("100.71.1.1")
 	newIP := netip.MustParseAddr("100.72.2.2")
 	index := 17
 	kernelRoutes := make(map[systemRoute]bool)
 	failDeletes := true
 	sentinel := errors.New("delete failed")
-	manager := newFakeSystemRouteManager(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
+	manager := newFakeSystemExitRouteReconciler(func() (int, int, error) { return index, index, nil }, func(typ int, route systemRoute) error {
 		switch typ {
 		case unix.RTM_ADD, unix.RTM_CHANGE:
 			kernelRoutes[route] = true
@@ -906,7 +906,7 @@ func TestSystemRouteManagerRetainsBothRoutesAfterFailedRollback(t *testing.T) {
 }
 
 func TestMissingDarwinInterfaceIsTransient(t *testing.T) {
-	manager := newSystemRouteManager("sing-box-route-test-interface-does-not-exist", 1280, t.TempDir())
+	manager := newSystemExitRouteReconciler("sing-box-route-test-interface-does-not-exist", 1280, t.TempDir())
 	_, err := manager.Update(true, netip.MustParseAddr("100.71.1.1"), netip.Addr{})
 	if err == nil {
 		t.Fatal("missing interface unexpectedly succeeded")

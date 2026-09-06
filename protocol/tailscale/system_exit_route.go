@@ -3,6 +3,7 @@
 package tailscale
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"os"
@@ -17,13 +18,13 @@ var (
 	errSystemRouteInterfacePending = errors.New("Tailscale system interface is not ready")
 )
 
-// systemRouteManager owns the exit-node default routes for a system-interface
+// systemExitRouteReconciler owns the exit-node default routes for a system-interface
 // endpoint. Tailscale's embedded router deliberately omits those routes so
 // that it cannot replace sing-box's primary routing policy. The manager is
 // therefore kept separate from the Tailscale router and only handles the
 // interface-scoped defaults needed by sockets explicitly bound to the
 // Tailscale system interface.
-type systemRouteManager interface {
+type systemExitRouteReconciler interface {
 	// Update returns the delay before a deferred reconciliation is required.
 	// A positive delay is independent from readiness: currently usable routes
 	// may already be installed while an old address-family route is retained
@@ -80,4 +81,42 @@ func isTransientSystemRouteError(err error) bool {
 		errors.Is(err, syscall.ESRCH) ||
 		errors.Is(err, syscall.ENETDOWN) ||
 		errors.Is(err, syscall.ENETUNREACH)
+}
+
+func (t *Endpoint) startSystemExitRoutes(interfaceName string, mtu uint32) {
+	if t.systemRoutes != nil {
+		return
+	}
+	t.systemRoutes = newSystemExitRouteFacility(
+		t.logger,
+		newSystemExitRouteReconciler(interfaceName, mtu, t.server.Dir),
+		func() bool {
+			return t.server != nil && t.serverStarted.Load()
+		},
+		func() (bool, netip.Addr, netip.Addr) {
+			ip4, ip6 := t.server.TailscaleIPs()
+			return t.systemExitNodeEnabled(), ip4, ip6
+		},
+	)
+	t.systemRoutes.Start()
+}
+
+func (t *Endpoint) requestSystemExitRouteUpdate() {
+	if t.systemRoutes != nil {
+		t.systemRoutes.Request()
+	}
+}
+
+func (t *Endpoint) waitSystemExitRouteUpdate(ctx context.Context) error {
+	if t.systemRoutes == nil {
+		return nil
+	}
+	return t.systemRoutes.RequestAndWait(ctx)
+}
+
+func (t *Endpoint) closeSystemExitRoutes() error {
+	if t.systemRoutes == nil {
+		return nil
+	}
+	return t.systemRoutes.Close()
 }
