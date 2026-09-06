@@ -38,6 +38,16 @@ jobs:
           path.write_text(text.replace(old, new, 1))
           PY
           python3 .github/apply_tailscale_system_route_followup.py
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          path = Path('protocol/tailscale/system_routes_darwin_test.go')
+          text = path.read_text()
+          text, count = re.subn(r'(?m)^(\s*)_ = manager\.Update\(', r'\1_, _ = manager.Update(', text)
+          if count != 1:
+              raise SystemExit(f'expected one discarded Update result, found {count}')
+          path.write_text(text)
+          PY
           go mod edit -replace=github.com/sagernet/tailscale=github.com/wignerStan/tailscale@v0.0.0-20260906081838-3ed657099ca2
           go mod tidy
           gofmt -w \
