@@ -84,8 +84,10 @@ If kernel capture teardown returns an error, sing-box deliberately retains the o
 ### Build
 
 ```bash
-go build -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS)" \
+CGO_ENABLED=0 go build -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" \
   -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
 ```
+
+The Naive outbound in `DEFAULT_BUILD_TAGS` requires the Chromium toolchain prepared by sing-box's release workflow; add `with_dae` to that workflow's tags when building the Naive variant.
 
 Until the standalone provider is merged or tagged upstream, this fork pins the canonical provider module through a `replace` directive to `wignerStan/dae`.
