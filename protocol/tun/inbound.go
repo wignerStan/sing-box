@@ -55,6 +55,9 @@ type Inbound struct {
 	platformInterface           adapter.PlatformInterface
 	platformOptions             option.TunPlatformOptions
 	autoRedirect                tun.AutoRedirect
+	autoRedirectMarkRegistered  bool
+	closeOnce                   sync.Once
+	closeErr                    error
 	routeRuleSet                []adapter.RuleSet
 	routeRuleSetCallback        []*list.Element[adapter.RuleSetUpdateCallback]
 	routeExcludeRuleSet         []adapter.RuleSet
@@ -277,6 +280,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 			if err != nil {
 				return nil, err
 			}
+			inbound.autoRedirectMarkRegistered = true
 		}
 	}
 	return inbound, nil
@@ -529,11 +533,17 @@ func (t *Inbound) InterfaceUpdated(ctx context.Context) {
 }
 
 func (t *Inbound) Close() error {
-	return common.Close(
-		t.tunStack,
-		t.tunIf,
-		t.autoRedirect,
-	)
+	t.closeOnce.Do(func() {
+		t.closeErr = common.Close(
+			t.tunStack,
+			t.tunIf,
+			t.autoRedirect,
+		)
+		if t.closeErr == nil && t.autoRedirectMarkRegistered {
+			t.closeErr = t.networkManager.UnregisterAutoRedirectOutputMark(t.tunOptions.AutoRedirectOutputMark)
+		}
+	})
+	return t.closeErr
 }
 
 func (t *Inbound) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {
