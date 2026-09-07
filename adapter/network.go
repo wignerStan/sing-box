@@ -26,6 +26,7 @@ type NetworkManager interface {
 	ProtectFunc() control.Func
 	DefaultOptions() NetworkOptions
 	RegisterAutoRedirectOutputMark(mark uint32) error
+	UnregisterAutoRedirectOutputMark(mark uint32) error
 	AutoRedirectOutputMark() uint32
 	AutoRedirectOutputMarkFunc() control.Func
 	NetworkMonitor() tun.NetworkUpdateMonitor

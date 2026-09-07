@@ -115,6 +115,7 @@ type ConnectionOwner struct {
 	ProcessID    uint32
 	UserId       int32
 	UserName     string
+	ProcessNames []string
 	ProcessPaths []string
 	PackageNames []string
 }

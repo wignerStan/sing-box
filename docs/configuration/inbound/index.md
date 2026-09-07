@@ -17,6 +17,7 @@
 
 | Type          | Format                        | Injectable       |
 |---------------|-------------------------------|------------------|
+| `dae`         | [dae eBPF](./dae/)            | :material-close: |
 | `direct`      | [Direct](./direct/)           | :material-close: |
 | `mixed`       | [Mixed](./mixed/)             | TCP              |
 | `socks`       | [SOCKS](./socks/)             | TCP              |
