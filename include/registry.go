@@ -52,6 +52,7 @@ func Context(ctx context.Context) context.Context {
 func InboundRegistry() *inbound.Registry {
 	registry := inbound.NewRegistry()
 
+	registerDAEInbound(registry)
 	tun.RegisterInbound(registry)
 	redirect.RegisterRedirect(registry)
 	redirect.RegisterTProxy(registry)
