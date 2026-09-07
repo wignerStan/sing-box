@@ -36,9 +36,7 @@ func TestAutoRedirectOutputMarkConcurrentRead(t *testing.T) {
 	var readers sync.WaitGroup
 	start := make(chan struct{})
 	for range 4 {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
+		readers.Go(func() {
 			<-start
 			for range iterations {
 				mark := manager.AutoRedirectOutputMark()
@@ -47,7 +45,7 @@ func TestAutoRedirectOutputMarkConcurrentRead(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	close(start)
 	for range iterations {
