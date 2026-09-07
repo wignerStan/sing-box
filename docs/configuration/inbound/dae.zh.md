@@ -84,8 +84,10 @@ sudo sing-box tools dae cleanup-stale
 ### 构建
 
 ```bash
-go build -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS)" \
+CGO_ENABLED=0 go build -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" \
   -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
 ```
+
+`DEFAULT_BUILD_TAGS` 中的 Naive 出站需要使用 sing-box 发布工作流准备的 Chromium 工具链；构建 Naive 版本时，应在该工作流的标签中加入 `with_dae`。
 
 在独立模块合并到上游或发布标签之前，本分支通过 `replace` 指令把标准模块路径固定到 `wignerStan/dae`。
