@@ -1,6 +1,7 @@
 package constant
 
 const (
+	TypeDAE                = "dae"
 	TypeTun                = "tun"
 	TypeRedirect           = "redirect"
 	TypeTProxy             = "tproxy"
@@ -52,6 +53,8 @@ const (
 
 func ProxyDisplayName(proxyType string) string {
 	switch proxyType {
+	case TypeDAE:
+		return "dae eBPF"
 	case TypeTun:
 		return "TUN"
 	case TypeRedirect:

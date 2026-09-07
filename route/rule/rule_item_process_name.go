@@ -30,8 +30,13 @@ func (r *ProcessItem) Match(metadata *adapter.InboundContext) bool {
 	if metadata.ProcessInfo == nil {
 		return false
 	}
-	return slices.ContainsFunc(metadata.ProcessInfo.ProcessPaths, func(processPath string) bool {
+	if slices.ContainsFunc(metadata.ProcessInfo.ProcessPaths, func(processPath string) bool {
 		return r.processMap[filepath.Base(processPath)]
+	}) {
+		return true
+	}
+	return slices.ContainsFunc(metadata.ProcessInfo.ProcessNames, func(processName string) bool {
+		return r.processMap[processName]
 	})
 }
 

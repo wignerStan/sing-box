@@ -416,6 +416,14 @@ func (r *NetworkManager) RegisterAutoRedirectOutputMark(mark uint32) error {
 	return nil
 }
 
+func (r *NetworkManager) UnregisterAutoRedirectOutputMark(mark uint32) error {
+	if mark == 0 || r.autoRedirectOutputMark != mark {
+		return E.New("auto-redirect output mark ownership mismatch")
+	}
+	r.autoRedirectOutputMark = 0
+	return nil
+}
+
 func (r *NetworkManager) AutoRedirectOutputMark() uint32 {
 	return r.autoRedirectOutputMark
 }
