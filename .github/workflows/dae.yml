@@ -1,0 +1,97 @@
+name: dae eBPF inbound
+
+on:
+  pull_request:
+    branches:
+      - testing
+    paths:
+      - "adapter/**"
+      - "cmd/sing-box/cmd_tools_dae.go"
+      - "constant/proxy.go"
+      - "go.mod"
+      - "go.sum"
+      - "include/dae*.go"
+      - "include/registry.go"
+      - "option/dae.go"
+      - "protocol/dae/**"
+      - "protocol/tun/inbound*"
+      - "route/network.go"
+      - "route/rule/rule_item_process_name*"
+      - ".github/workflows/dae.yml"
+  push:
+    branches:
+      - testing
+    paths:
+      - "adapter/**"
+      - "cmd/sing-box/cmd_tools_dae.go"
+      - "constant/proxy.go"
+      - "go.mod"
+      - "go.sum"
+      - "include/dae*.go"
+      - "include/registry.go"
+      - "option/dae.go"
+      - "protocol/dae/**"
+      - "protocol/tun/inbound*"
+      - "route/network.go"
+      - "route/rule/rule_item_process_name*"
+      - ".github/workflows/dae.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dae-ebpf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: One-shot provider contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+
+      - name: Check module and formatting
+        run: |
+          set -euxo pipefail
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          test -z "$(gofmt -l -- adapter/inbound.go adapter/network.go adapter/platform.go cmd/sing-box/cmd_tools_dae.go constant/proxy.go include/dae.go include/dae_stub.go include/registry.go option/dae.go protocol/dae/*.go protocol/tun/inbound*.go route/network.go route/network_test.go route/rule/rule_item_process_name.go route/rule/rule_item_process_name_test.go)"
+
+      - name: Test direct dispatcher
+        run: |
+          set -euxo pipefail
+          go test -race -tags with_dae ./protocol/dae ./protocol/tun ./route ./route/rule
+          go vet -tags with_dae ./protocol/dae ./protocol/tun ./route ./route/rule
+
+      - name: Build tagged sing-box
+        run: |
+          set -euxo pipefail
+          tags="with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+          CGO_ENABLED=0 go build -tags "$tags" -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
+          ./sing-box tools dae --help
+
+      - name: Test real eBPF datapath and recovery
+        run: |
+          set -euxo pipefail
+          test_binary="$RUNNER_TEMP/sing-box-dae-integration.test"
+          go test -c -tags 'with_dae integration' -o "$test_binary" ./protocol/dae
+          sudo env SING_BOX_DAE_BINARY="$PWD/sing-box" \
+            "$test_binary" -test.run '^TestDAEInboundRealDatapath$' -test.count 1 -test.v
+          sudo test ! -e /run/dae-ebpfinbound/owner.json
+
+      - name: Check standalone dependency boundary
+        run: |
+          set -euxo pipefail
+          replacement=$(go list -m -f '{{ with .Replace }}{{ .Path }}{{ end }}' github.com/daeuniverse/dae/ebpfinbound)
+          test "$replacement" = github.com/wignerStan/dae/ebpfinbound
+          dependencies=$(go list -tags with_dae -deps ./protocol/dae)
+          grep -Fx github.com/daeuniverse/dae/ebpfinbound <<<"$dependencies"
+          ! grep -E '^github.com/daeuniverse/dae/(cmd|common|component|config|control|pkg)(/|$)' <<<"$dependencies"
