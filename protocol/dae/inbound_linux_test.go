@@ -100,6 +100,7 @@ func newTestListenerSet(t *testing.T) *testListenerSet {
 type testRuntime struct {
 	listeners *testListenerSet
 	lookup    ebpfinbound.Metadata
+	closeErr  error
 
 	access     sync.Mutex
 	closeCount int
@@ -127,7 +128,7 @@ func (r *testRuntime) Close() error {
 		_ = r.listeners.tcp6.Close()
 		_ = r.listeners.udp.Close()
 	})
-	return nil
+	return r.closeErr
 }
 
 func (r *testRuntime) closes() int {
@@ -248,6 +249,27 @@ func TestRuntimeCloseWaitsForDispatch(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runtime did not close after dispatch completed")
+	}
+}
+
+func TestRuntimeCloseFailureRetainsOutputMark(t *testing.T) {
+	manager := &testNetworkManager{}
+	runtime := &testRuntime{listeners: newTestListenerSet(t), closeErr: errors.New("detach failed")}
+	coordinator := &runtimeCoordinator{newRuntime: func(context.Context, ebpfinbound.Options) (ebpfinbound.Runtime, error) {
+		return runtime, nil
+	}}
+	inbound := newTestInbound(t, coordinator, manager, "dae-in", 0)
+	if err := inbound.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	if err := inbound.Close(); err == nil || !strings.Contains(err.Error(), "detach failed") {
+		t.Fatalf("close error = %v", err)
+	}
+	if mark := manager.AutoRedirectOutputMark(); mark != ebpfinbound.DefaultOutputMark {
+		t.Fatalf("output mark = %#x, want retained %#x", mark, ebpfinbound.DefaultOutputMark)
+	}
+	if manager.unregisterCount != 0 {
+		t.Fatalf("output mark was released after failed detach: %d", manager.unregisterCount)
 	}
 }
 

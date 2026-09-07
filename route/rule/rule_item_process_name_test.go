@@ -16,4 +16,9 @@ func TestProcessItemMatchesObservedProcessName(t *testing.T) {
 	if rule.Match(metadata) {
 		t.Fatal("process_name matched a different observed process")
 	}
+	metadata.ProcessInfo.ProcessNames = nil
+	metadata.ProcessInfo.ProcessPaths = []string{"/usr/bin/curl"}
+	if !rule.Match(metadata) {
+		t.Fatal("process_name no longer matched the executable basename")
+	}
 }
