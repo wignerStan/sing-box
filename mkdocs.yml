@@ -162,6 +162,7 @@ nav:
           - MASQUE Server: configuration/endpoint/masque-server.md
       - Inbound:
           - configuration/inbound/index.md
+          - dae eBPF: configuration/inbound/dae.md
           - Direct: configuration/inbound/direct.md
           - Mixed: configuration/inbound/mixed.md
           - SOCKS: configuration/inbound/socks.md

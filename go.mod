@@ -83,6 +83,11 @@ require (
 )
 
 require (
+	github.com/cilium/ebpf v0.20.0 // indirect
+	github.com/vishvananda/netlink v1.3.1 // indirect
+)
+
+require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
@@ -97,6 +102,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6 // indirect
 	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
+	github.com/daeuniverse/dae/ebpfinbound v0.0.0-20260907212147-03db16e3d761
 	github.com/database64128/netx-go v0.1.1 // indirect
 	github.com/dgrijalva/jwt-go/v4 v4.0.0-preview1 // indirect
 	github.com/dgryski/go-camellia v0.0.0-20191119043421-69a8a13fb23d // indirect
@@ -198,3 +204,5 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 	zombiezen.com/go/capnproto2 v2.18.2+incompatible // indirect
 )
+
+replace github.com/daeuniverse/dae/ebpfinbound => github.com/wignerStan/dae/ebpfinbound v0.0.0-20260907212147-03db16e3d761
