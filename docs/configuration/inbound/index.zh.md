@@ -17,6 +17,7 @@
 
 | 类型            | 格式                            | 注入支持             |
 |---------------|-------------------------------|------------------|
+| `dae`         | [dae eBPF](./dae/)            | :material-close: |
 | `direct`      | [Direct](./direct/)           | :material-close: |
 | `mixed`       | [Mixed](./mixed/)             | TCP              |
 | `socks`       | [SOCKS](./socks/)             | TCP              |
