@@ -79,6 +79,8 @@ sudo sing-box tools dae cleanup-stale
 
 Cleanup checks the provider ownership journal, process/boot identity, namespace identity, link tokens, TC slots, and BPF program IDs before removing anything.
 
+If kernel capture teardown returns an error, sing-box deliberately retains the output-mark lease so residual hooks cannot recapture its own traffic. Clean the recorded stale state and restart the process instead of continuing with an ambiguous capture owner.
+
 ### Build
 
 ```bash

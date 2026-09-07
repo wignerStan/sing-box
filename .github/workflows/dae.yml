@@ -14,6 +14,7 @@ on:
       - "include/registry.go"
       - "option/dae.go"
       - "protocol/dae/**"
+      - "protocol/tun/inbound*"
       - "route/network.go"
       - "route/rule/rule_item_process_name*"
       - ".github/workflows/dae.yml"
@@ -30,6 +31,7 @@ on:
       - "include/registry.go"
       - "option/dae.go"
       - "protocol/dae/**"
+      - "protocol/tun/inbound*"
       - "route/network.go"
       - "route/rule/rule_item_process_name*"
       - ".github/workflows/dae.yml"
@@ -61,13 +63,13 @@ jobs:
           set -euxo pipefail
           go mod tidy
           git diff --exit-code -- go.mod go.sum
-          test -z "$(gofmt -l -- adapter/inbound.go adapter/network.go adapter/platform.go cmd/sing-box/cmd_tools_dae.go constant/proxy.go include/dae.go include/dae_stub.go include/registry.go option/dae.go protocol/dae/*.go route/network.go route/rule/rule_item_process_name.go route/rule/rule_item_process_name_test.go)"
+          test -z "$(gofmt -l -- adapter/inbound.go adapter/network.go adapter/platform.go cmd/sing-box/cmd_tools_dae.go constant/proxy.go include/dae.go include/dae_stub.go include/registry.go option/dae.go protocol/dae/*.go protocol/tun/inbound*.go route/network.go route/network_test.go route/rule/rule_item_process_name.go route/rule/rule_item_process_name_test.go)"
 
       - name: Test direct dispatcher
         run: |
           set -euxo pipefail
-          go test -race -tags with_dae ./protocol/dae ./route/rule
-          go vet -tags with_dae ./protocol/dae ./route/rule
+          go test -race -tags with_dae ./protocol/dae ./protocol/tun ./route ./route/rule
+          go vet -tags with_dae ./protocol/dae ./protocol/tun ./route ./route/rule
 
       - name: Build tagged sing-box
         run: |
@@ -75,6 +77,15 @@ jobs:
           tags="with_dae,$(cat release/DEFAULT_BUILD_TAGS)"
           go build -tags "$tags" -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
           ./sing-box tools dae --help
+
+      - name: Test real eBPF datapath and recovery
+        run: |
+          set -euxo pipefail
+          test_binary="$RUNNER_TEMP/sing-box-dae-integration.test"
+          go test -c -tags 'with_dae integration' -o "$test_binary" ./protocol/dae
+          sudo env SING_BOX_DAE_BINARY="$PWD/sing-box" \
+            "$test_binary" -test.run '^TestDAEInboundRealDatapath$' -test.count 1 -test.v
+          sudo test ! -e /run/dae-ebpfinbound/owner.json
 
       - name: Check standalone dependency boundary
         run: |

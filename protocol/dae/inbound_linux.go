@@ -282,10 +282,11 @@ func (c *runtimeCoordinator) start(i *Inbound) error {
 		if udpStarted {
 			cleanupErr = stderrors.Join(cleanupErr, i.udpNat.Close())
 		}
-		if markRegistered {
+		runtimeCloseErr := runtime.Close()
+		cleanupErr = stderrors.Join(cleanupErr, runtimeCloseErr)
+		if markRegistered && runtimeCloseErr == nil {
 			cleanupErr = stderrors.Join(cleanupErr, i.networkManager.UnregisterAutoRedirectOutputMark(runtime.OutputMark()))
 		}
-		cleanupErr = stderrors.Join(cleanupErr, runtime.Close())
 		logWriter.Flush()
 		return stderrors.Join(startErr, cleanupErr)
 	}
@@ -451,12 +452,17 @@ func (c *runtimeCoordinator) release(member *runtimeMember) error {
 	lease.memberCleanup.Wait()
 	lease.dispatches.Wait()
 	lease.loopCancel()
-	if err := lease.runtime.Close(); err != nil {
-		errs = append(errs, err)
+	runtimeCloseErr := lease.runtime.Close()
+	if runtimeCloseErr != nil {
+		errs = append(errs, runtimeCloseErr)
 	}
 	lease.loops.Wait()
-	if err := lease.networkManager.UnregisterAutoRedirectOutputMark(lease.runtime.OutputMark()); err != nil {
-		errs = append(errs, E.Cause(err, "unregister dae output mark"))
+	if runtimeCloseErr == nil {
+		if err := lease.networkManager.UnregisterAutoRedirectOutputMark(lease.runtime.OutputMark()); err != nil {
+			errs = append(errs, E.Cause(err, "unregister dae output mark"))
+		}
+	} else {
+		lease.logger.Warn("retaining dae output mark because the capture runtime did not close cleanly")
 	}
 	lease.logWriter.Flush()
 
