@@ -103,6 +103,9 @@ def tree_digest(root: Path) -> tuple[str, list[dict[str, Any]]]:
         info = path.lstat()
         mode = stat.S_IMODE(info.st_mode)
         if path.is_symlink():
+            # POSIX exposes platform-specific permission bits for symlinks.
+            # Git records symlinks by target, not by those filesystem bits.
+            mode = 0o777
             kind = "symlink"
             target = os.readlink(path)
             content_sha256 = hashlib.sha256(target.encode("utf-8")).hexdigest()
