@@ -19,8 +19,9 @@ var tailscaleProcessHookRegistry struct {
 // process-global network hooks. Releasing a stale or foreign lease cannot
 // clear hooks installed by the current owner.
 type processHookLease struct {
-	owner    *Endpoint
-	released bool
+	owner          *Endpoint
+	released       bool
+	interfaceProps bool
 }
 
 func acquireProcessHookLease(owner *Endpoint) (*processHookLease, error) {
@@ -37,6 +38,22 @@ func acquireProcessHookLease(owner *Endpoint) (*processHookLease, error) {
 	return lease, nil
 }
 
+// setSystemInterface associates the real OS TUN with the same exclusive lease
+// as the socket hooks. A stale lease cannot replace a newer endpoint's identity.
+func (l *processHookLease) setSystemInterface(name string, index int) error {
+	tailscaleProcessHookRegistry.Lock()
+	defer tailscaleProcessHookRegistry.Unlock()
+	if l == nil || l.released || tailscaleProcessHookRegistry.lease != l {
+		return E.New("inactive Tailscale process-hook lease")
+	}
+	if name == "" || index <= 0 {
+		return E.New("invalid Tailscale system-interface identity")
+	}
+	netmon.SetTailscaleInterfaceProps(name, index)
+	l.interfaceProps = true
+	return nil
+}
+
 func (l *processHookLease) Release() {
 	if l == nil {
 		return
@@ -49,6 +66,9 @@ func (l *processHookLease) Release() {
 	l.released = true
 	if tailscaleProcessHookRegistry.lease != l {
 		return
+	}
+	if l.interfaceProps {
+		netmon.SetTailscaleInterfaceProps("", 0)
 	}
 	netmon.RegisterInterfaceGetter(nil)
 	netns.SetControlFunc(nil)
