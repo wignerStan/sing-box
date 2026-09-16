@@ -1,0 +1,19 @@
+{
+  "components": [
+    {
+      "module": "github.com/daeuniverse/dae/ebpfinbound",
+      "name": "dae-ebpfinbound",
+      "path": "vendor/dae/ebpfinbound",
+      "tree_sha256": "c3331ff43cc52826f2b573a0718f4f4768c6608caf608922d6d40ccd84a705c9"
+    },
+    {
+      "module": "github.com/sagernet/tailscale",
+      "name": "tailscale",
+      "path": "vendor/tailscale",
+      "tree_sha256": "3f68352fce0ea57c8bdcb371c327b8f4a347ebff1a25e3f8c5afcda1dc3898cd"
+    }
+  ],
+  "generated_by": "tools/vendor/materialize.py",
+  "lock": "deps/vendor-lock.json",
+  "schema_version": "sing-box-vendor-manifest/v1"
+}

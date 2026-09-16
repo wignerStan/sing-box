@@ -1,5 +1,4 @@
 /.idea/
-/vendor/
 /*.json
 /*.srs
 /*.db
@@ -21,3 +20,5 @@
 CLAUDE.md
 AGENTS.md
 /.claude/
+
+/.vendor-work/

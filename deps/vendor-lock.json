@@ -1,0 +1,60 @@
+{
+  "authority": "wignerStan/sing-box",
+  "components": [
+    {
+      "materialization": {
+        "entries": 40,
+        "path": "vendor/dae/ebpfinbound",
+        "source_subpath": "ebpfinbound",
+        "tree_sha256": "c3331ff43cc52826f2b573a0718f4f4768c6608caf608922d6d40ccd84a705c9"
+      },
+      "module": "github.com/daeuniverse/dae/ebpfinbound",
+      "name": "dae-ebpfinbound",
+      "patches": [
+        {
+          "order": 1,
+          "path": "patches/dae/0001-ebpfinbound-runtime.patch",
+          "sha256": "8fef2068d26498789bc7a5acb5f63abde2746880bb0398884abc392347017795"
+        },
+        {
+          "order": 2,
+          "path": "patches/dae/0002-namespace-identity.patch",
+          "sha256": "aebac8f61464fbbea8aaa21e0d38e7b27796e6b402d64040d9bae8c15bed512b"
+        }
+      ],
+      "result_tree": "5db9c18ac05342ff422f034e702fb4b8d56f8bc4",
+      "source": {
+        "commit": "5db27a0028d36e7847bd3796497df952337a20e2",
+        "path": "third_party/dae"
+      }
+    },
+    {
+      "materialization": {
+        "entries": 1918,
+        "path": "vendor/tailscale",
+        "source_subpath": ".",
+        "tree_sha256": "3f68352fce0ea57c8bdcb371c327b8f4a347ebff1a25e3f8c5afcda1dc3898cd"
+      },
+      "module": "github.com/sagernet/tailscale",
+      "name": "tailscale",
+      "patches": [
+        {
+          "order": 1,
+          "path": "patches/tailscale/0001-pure-system-dataplane.patch",
+          "sha256": "f48dec6a37ccc27347785a037a9042d4e4563efa52d74ecd0a67972b65db710f"
+        },
+        {
+          "order": 2,
+          "path": "patches/tailscale/0002-cgnat-direct-udp.patch",
+          "sha256": "f1ac39a3870ce2545c435aaff0b7c7d1e2e3f5aadb697bf793b24b072010914a"
+        }
+      ],
+      "result_tree": "619a2708320b0b1bdc8460a3eea9160785b31c77",
+      "source": {
+        "commit": "c8e28eeffe16a390ae8e320500175de6207f521f",
+        "path": "third_party/tailscale"
+      }
+    }
+  ],
+  "schema_version": "sing-box-vendor-lock/v1"
+}
