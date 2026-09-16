@@ -1,0 +1,135 @@
+name: Patch and vendor integrity
+on:
+  pull_request:
+    branches: [testing]
+    paths:
+      - '.gitmodules'
+      - 'third_party/**'
+      - 'patches/**'
+      - 'vendor/**'
+      - 'deps/vendor-lock.json'
+      - 'tools/vendor/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'protocol/dae/**'
+      - 'protocol/tailscale/**'
+      - 'protocol/tun/**'
+      - '.github/workflows/vendor-integrity.yml'
+  push:
+    branches: [integration/vendor-authority]
+permissions:
+  contents: read
+concurrency:
+  group: vendor-integrity-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  PRODUCT_TAGS: with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Verify source and materialization contract
+        run: python3 tools/vendor/verify.py
+      - name: Test materialized dependencies
+        run: |
+          set -euxo pipefail
+          (cd vendor/dae/ebpfinbound && go test -race -count=1 ./... && go vet ./...)
+          (cd vendor/tailscale && go test -race -count=1 ./tsnet ./net/netmon ./util/linuxfw && go vet ./tsnet ./net/netmon ./util/linuxfw)
+      - name: Test combined product
+        run: |
+          set -euxo pipefail
+          GOFLAGS=-mod=mod go test -race -tags "$PRODUCT_TAGS" -count=1 ./protocol/dae ./protocol/tailscale ./protocol/tun
+          GOFLAGS=-mod=mod go vet -tags "$PRODUCT_TAGS" ./protocol/dae ./protocol/tailscale ./protocol/tun
+          CGO_ENABLED=0 GOFLAGS=-mod=mod go build -trimpath -tags "$PRODUCT_TAGS" -o "$RUNNER_TEMP/sing-box" ./cmd/sing-box
+      - name: Test real Tailscale firewall behavior
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y iproute2 iptables nftables
+          (cd vendor/tailscale && go test -c -tags cgnat_integration -o "$RUNNER_TEMP/tailscale-firewall.test" ./util/linuxfw)
+          bash vendor/tailscale/scripts/test-cgnat-kernel.sh "$RUNNER_TEMP/tailscale-firewall.test"
+      - name: Test real DAE datapath and recovery
+        run: |
+          set -euxo pipefail
+          test_binary="$RUNNER_TEMP/sing-box-dae-integration.test"
+          GOFLAGS=-mod=mod go test -c -tags 'with_dae integration' -o "$test_binary" ./protocol/dae
+          sudo env SING_BOX_DAE_BINARY="$RUNNER_TEMP/sing-box" "$test_binary" -test.run '^TestDAEInboundRealDatapath$' -test.count 1 -test.v
+          sudo test ! -e /run/dae-ebpfinbound/owner.json
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Verify deterministic materialization
+        run: python3 tools/vendor/verify.py
+      - name: Test native Tailscale lifecycle
+        run: |
+          set -euxo pipefail
+          GOFLAGS=-mod=mod go test -race -tags "$PRODUCT_TAGS" -count=1 ./protocol/tailscale ./protocol/tun
+          GOFLAGS=-mod=mod go vet -tags "$PRODUCT_TAGS" ./protocol/tailscale ./protocol/tun
+          CGO_ENABLED=0 GOFLAGS=-mod=mod GOOS=darwin GOARCH=arm64 go build -trimpath -tags "$PRODUCT_TAGS" -o "$RUNNER_TEMP/sing-box-darwin-arm64" ./cmd/sing-box
+          "$RUNNER_TEMP/sing-box-darwin-arm64" version
+
+  backport:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Materialize and test Tailscale 1.94.2
+        run: |
+          set -euxo pipefail
+          python3 tools/vendor/materialize_backport.py --output "$RUNNER_TEMP/tailscale-1.94.2"
+          cd "$RUNNER_TEMP/tailscale-1.94.2"
+          go test -race -count=1 ./net/netmon ./util/linuxfw
+          go vet ./net/netmon ./util/linuxfw
+          go test -c -tags cgnat_integration -o "$RUNNER_TEMP/backport-firewall.test" ./util/linuxfw
+          sudo apt-get update -qq
+          sudo apt-get install -y iproute2 iptables nftables
+          bash scripts/test-cgnat-kernel.sh "$RUNNER_TEMP/backport-firewall.test"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$RUNNER_TEMP/tailscale" ./cmd/tailscale
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$RUNNER_TEMP/tailscaled" ./cmd/tailscaled
+
+  clean-archive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Build from tracked source archive only
+        run: |
+          set -euxo pipefail
+          git archive HEAD | tar -x -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"
+          test -f vendor/MANIFEST.json
+          test -f vendor/dae/ebpfinbound/go.mod
+          test -f vendor/tailscale/go.mod
+          CGO_ENABLED=0 GOFLAGS=-mod=mod go build -trimpath -tags "$PRODUCT_TAGS" ./cmd/sing-box

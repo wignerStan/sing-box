@@ -1,0 +1,15 @@
+{
+  "patches": [
+    {
+      "order": 1,
+      "path": "patches/tailscale-1.94.2/0001-cgnat-direct-udp.patch",
+      "sha256": "475c78633ef6c6eb9bd7eec91c10e47831a05dc1e20b2760e2cdb593a84c0cf2"
+    }
+  ],
+  "result_tree": "468181cd1fe62e06322de80d3042cd53fa028a89",
+  "schema_version": "sing-box-backport-lock/v1",
+  "source": {
+    "commit": "2de4d317a8c2595904f1563ebd98fdcf843da275",
+    "path": "third_party/tailscale-1.94.2"
+  }
+}
