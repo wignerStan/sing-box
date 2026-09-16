@@ -1,44 +1,186 @@
-name: Prove generated vendor checkout model
+name: Publish clean patch-vendor authority
 on:
   push:
     branches: [integration/patch-vendor-authority]
     paths: [.github/workflows/migrate-patch-vendor.yml]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  prove:
+  publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: Check out migration control source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           ref: integration/patch-vendor-authority
-          path: source
+          path: control
           persist-credentials: false
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: Check out clean product base
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          repository: wignerStan/dae
-          ref: 03db16e3d76132e926c15d66aa68c7075fbc115f
-          path: source/vendor/dae
-          persist-credentials: false
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
-        with:
-          repository: wignerStan/tailscale
-          ref: 77241e18758f55ee2e74cde8c868baa6596bbada
-          path: source/vendor/tailscale
-          persist-credentials: false
+          ref: testing
+          path: repo
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
           cache: false
-      - name: Test parent-owned materialized checkouts
-        working-directory: source
+      - name: Merge reviewed product lines
+        working-directory: repo
         run: |
           set -euxo pipefail
-          rm -rf vendor/dae/.git vendor/tailscale/.git
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin fix/tailscale-cgnat-direct-udp
+          if ! git merge --no-ff --no-commit origin/fix/tailscale-cgnat-direct-udp; then
+            test "$(git diff --name-only --diff-filter=U | sort | tr '\n' ' ')" = 'go.mod go.sum '
+            git show :3:go.sum > "$RUNNER_TEMP/theirs.go.sum"
+            git checkout --ours go.mod go.sum
+            grep -q '^replace github.com/sagernet/tailscale ' go.mod || printf '\nreplace github.com/sagernet/tailscale => github.com/wignerStan/tailscale v0.0.0-20260916025124-ddc87a687baf\n' >> go.mod
+            cat "$RUNNER_TEMP/theirs.go.sum" >> go.sum
+            LC_ALL=C sort -u go.sum -o go.sum
+            git add go.mod go.sum
+          fi
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --check --cached
+          git commit -s -m 'merge: combine DAE and native Tailscale integration'
+      - name: Install permanent authority tooling
+        working-directory: repo
+        run: |
+          set -euxo pipefail
+          mkdir -p tools/vendor .github/workflows docs
+          cp ../control/tools/vendor/*.py tools/vendor/
+          cp ../control/.github/workflows/vendor-integrity.yml .github/workflows/vendor-integrity.yml
+          cp ../control/.github/workflows/vendor-release.yml .github/workflows/vendor-release.yml
+          cp ../control/docs/VENDOR_AUTHORITY.md docs/VENDOR_AUTHORITY.md
+          chmod +x tools/vendor/*.py
+          rm -f .github/workflows/dae.yml .github/workflows/tailscale-cgnat.yml
+          sed -i '\|^/vendor/$|d' .gitignore
+          grep -qxF '/.vendor-work/' .gitignore || printf '\n/.vendor-work/\n' >> .gitignore
+      - name: Pin pristine public sources
+        working-directory: repo
+        run: |
+          set -euxo pipefail
+          git submodule add --depth 1 https://github.com/daeuniverse/dae.git third_party/dae
+          git -C third_party/dae fetch --depth=1 origin 5db27a0028d36e7847bd3796497df952337a20e2
+          git -C third_party/dae checkout --detach 5db27a0028d36e7847bd3796497df952337a20e2
+          git submodule add --depth 1 https://github.com/SagerNet/tailscale.git third_party/tailscale
+          git -C third_party/tailscale fetch --depth=1 origin c8e28eeffe16a390ae8e320500175de6207f521f
+          git -C third_party/tailscale checkout --detach c8e28eeffe16a390ae8e320500175de6207f521f
+          git submodule add --depth 1 https://github.com/tailscale/tailscale.git third_party/tailscale-1.94.2
+          git -C third_party/tailscale-1.94.2 fetch --depth=1 origin 2de4d317a8c2595904f1563ebd98fdcf843da275
+          git -C third_party/tailscale-1.94.2 checkout --detach 2de4d317a8c2595904f1563ebd98fdcf843da275
+      - name: Export ordered downstream patch stacks
+        working-directory: repo
+        run: |
+          set -euxo pipefail
+          mkdir -p patches/dae patches/tailscale patches/tailscale-1.94.2
+          git -C third_party/dae remote add downstream https://github.com/wignerStan/dae.git
+          git -C third_party/dae fetch --depth=1 downstream deb019aac2b1344f0f5145f879463f1ab22ba633
+          git -C third_party/dae fetch --depth=1 downstream 03db16e3d76132e926c15d66aa68c7075fbc115f
+          git -C third_party/dae diff --binary --full-index 5db27a0028d36e7847bd3796497df952337a20e2 deb019aac2b1344f0f5145f879463f1ab22ba633 > patches/dae/0001-ebpfinbound-runtime.patch
+          git -C third_party/dae diff --binary --full-index deb019aac2b1344f0f5145f879463f1ab22ba633 03db16e3d76132e926c15d66aa68c7075fbc115f > patches/dae/0002-namespace-identity.patch
+          printf '%s\n' 0001-ebpfinbound-runtime.patch 0002-namespace-identity.patch > patches/dae/series
+
+          git -C third_party/tailscale remote add downstream https://github.com/wignerStan/tailscale.git
+          git -C third_party/tailscale fetch --depth=1 downstream 76dc752abe20efe2bc43e5521f999d8f7356c95f
+          git -C third_party/tailscale fetch --depth=1 downstream ddc87a687baff77037ea3d764bf738be253f6bdb
+          git -C third_party/tailscale diff --binary --full-index c8e28eeffe16a390ae8e320500175de6207f521f 76dc752abe20efe2bc43e5521f999d8f7356c95f > patches/tailscale/0001-pure-system-dataplane.patch
+          git -C third_party/tailscale diff --binary --full-index 76dc752abe20efe2bc43e5521f999d8f7356c95f ddc87a687baff77037ea3d764bf738be253f6bdb > patches/tailscale/0002-cgnat-direct-udp.patch
+          printf '%s\n' 0001-pure-system-dataplane.patch 0002-cgnat-direct-udp.patch > patches/tailscale/series
+
+          git -C third_party/tailscale-1.94.2 remote add downstream https://github.com/wignerStan/tailscale.git
+          git -C third_party/tailscale-1.94.2 fetch --depth=1 downstream 901dde977a3309eba2837abcb6a7e1f216c5e220
+          git -C third_party/tailscale-1.94.2 diff --binary --full-index 2de4d317a8c2595904f1563ebd98fdcf843da275 901dde977a3309eba2837abcb6a7e1f216c5e220 > patches/tailscale-1.94.2/0001-cgnat-direct-udp.patch
+          printf '%s\n' 0001-cgnat-direct-udp.patch > patches/tailscale-1.94.2/series
+          test -s patches/dae/0001-ebpfinbound-runtime.patch
+          test -s patches/dae/0002-namespace-identity.patch
+          test -s patches/tailscale/0001-pure-system-dataplane.patch
+          test -s patches/tailscale/0002-cgnat-direct-udp.patch
+          test -s patches/tailscale-1.94.2/0001-cgnat-direct-udp.patch
+      - name: Declare source relationships
+        working-directory: repo
+        run: |
+          set -euxo pipefail
+          mkdir -p deps/source-relationships
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          relationships = [
+              {
+                  'name': 'dae-ebpfinbound',
+                  'source': {'path': 'third_party/dae', 'url': 'https://github.com/daeuniverse/dae.git', 'commit': '5db27a0028d36e7847bd3796497df952337a20e2'},
+                  'series': 'patches/dae/series',
+                  'materialization': 'vendor/dae/ebpfinbound',
+                  'public_api': 'github.com/daeuniverse/dae/ebpfinbound',
+              },
+              {
+                  'name': 'tailscale',
+                  'source': {'path': 'third_party/tailscale', 'url': 'https://github.com/SagerNet/tailscale.git', 'commit': 'c8e28eeffe16a390ae8e320500175de6207f521f'},
+                  'series': 'patches/tailscale/series',
+                  'materialization': 'vendor/tailscale',
+                  'public_api': 'github.com/sagernet/tailscale',
+              },
+              {
+                  'name': 'tailscale-1.94.2',
+                  'source': {'path': 'third_party/tailscale-1.94.2', 'url': 'https://github.com/tailscale/tailscale.git', 'commit': '2de4d317a8c2595904f1563ebd98fdcf843da275'},
+                  'series': 'patches/tailscale-1.94.2/series',
+                  'materialization': None,
+                  'public_api': 'tailscale.com (standalone peer)',
+              },
+          ]
+          root = Path('deps/source-relationships')
+          for value in relationships:
+              value = {'schema_version': 'sing-box-patched-source/v1', 'kind': 'patched_third_party', **value}
+              (root / f"{value['name']}.json").write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+          PY
+      - name: Generate parent-owned vendor source and locks
+        working-directory: repo
+        run: |
+          set -euxo pipefail
+          python3 tools/vendor/materialize.py
+          backport="$RUNNER_TEMP/tailscale-1.94.2"
+          tree=$(python3 tools/vendor/materialize_backport.py --output "$backport")
+          TREE="$tree" python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          patch = Path('patches/tailscale-1.94.2/0001-cgnat-direct-udp.patch')
+          value = {
+              'schema_version': 'sing-box-backport-lock/v1',
+              'source': {'path': 'third_party/tailscale-1.94.2', 'commit': '2de4d317a8c2595904f1563ebd98fdcf843da275'},
+              'patches': [{'order': 1, 'path': patch.as_posix(), 'sha256': hashlib.sha256(patch.read_bytes()).hexdigest()}],
+              'result_tree': os.environ['TREE'],
+          }
+          Path('deps/tailscale-1.94.2-lock.json').write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+          PY
+      - name: Validate generated authority before publication
+        working-directory: repo
+        run: |
+          set -euxo pipefail
+          python3 tools/vendor/verify.py
+          (cd vendor/dae/ebpfinbound && go test -race -count=1 ./... && go vet ./...)
+          (cd vendor/tailscale && go test -race -count=1 ./tsnet ./net/netmon ./util/linuxfw && go vet ./tsnet ./net/netmon ./util/linuxfw)
+          tags='with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale'
+          GOFLAGS=-mod=mod go test -race -tags "$tags" -count=1 ./protocol/dae ./protocol/tailscale ./protocol/tun
+          GOFLAGS=-mod=mod go vet -tags "$tags" ./protocol/dae ./protocol/tailscale ./protocol/tun
+          CGO_ENABLED=0 GOFLAGS=-mod=mod go build -trimpath -tags "$tags" ./cmd/sing-box
+          backport="$RUNNER_TEMP/tailscale-1.94.2-validate"
+          python3 tools/vendor/materialize_backport.py --output "$backport"
+          (cd "$backport" && go test -race -count=1 ./net/netmon ./util/linuxfw && go vet ./net/netmon ./util/linuxfw)
           test -z "$(find vendor -name .git -print)"
-          go mod edit -replace=github.com/daeuniverse/dae/ebpfinbound=./vendor/dae/ebpfinbound
-          go mod edit -replace=github.com/sagernet/tailscale=./vendor/tailscale
-          go test -mod=mod -race -tags 'with_dae,with_gvisor,with_tailscale' -count=1 ./protocol/dae ./protocol/tailscale ./protocol/tun
-          go vet -mod=mod -tags 'with_dae,with_gvisor,with_tailscale' ./protocol/dae ./protocol/tailscale ./protocol/tun
-          CGO_ENABLED=0 go build -mod=mod -tags 'with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale' ./cmd/sing-box
+          git diff --check
+      - name: Commit and publish clean branch
+        working-directory: repo
+        run: |
+          set -euxo pipefail
+          git add .gitmodules third_party patches vendor deps tools/vendor docs/VENDOR_AUTHORITY.md go.mod go.sum .gitignore .github/workflows
+          git diff --cached --check
+          git commit -s -m 'build: make sing-box authoritative for patched DAE and Tailscale'
+          git push origin HEAD:refs/heads/integration/vendor-authority
+          {
+            echo '## Published patch-vendor authority'
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "DAE result tree: $(python3 -c \"import json; print(next(c['result_tree'] for c in json.load(open('deps/vendor-lock.json'))['components'] if c['name']=='dae-ebpfinbound'))\")"
+            echo "Tailscale result tree: $(python3 -c \"import json; print(next(c['result_tree'] for c in json.load(open('deps/vendor-lock.json'))['components'] if c['name']=='tailscale'))\")"
+          } >> "$GITHUB_STEP_SUMMARY"
