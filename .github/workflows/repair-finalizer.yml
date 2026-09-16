@@ -1,0 +1,34 @@
+name: Scope finalizer whitespace check
+on:
+  push:
+    branches: [integration/patch-vendor-authority]
+    paths: [.github/workflows/repair-finalizer.yml]
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: integration/patch-vendor-authority
+          fetch-depth: 1
+      - name: Restrict whitespace checks to authored source
+        run: |
+          set -euxo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/migrate-patch-vendor.yml')
+          text = path.read_text()
+          old = "          git diff --cached --check\n          git commit -s -m 'build: make sing-box authoritative for patched DAE and Tailscale'"
+          new = "          git diff --cached --check -- . ':(exclude)patches/**' ':(exclude)vendor/**'\n          git commit -s -m 'build: make sing-box authoritative for patched DAE and Tailscale'"
+          if text.count(old) != 1:
+              raise SystemExit('finalizer check anchor changed')
+          path.write_text(text.replace(old, new))
+          PY
+          rm .github/workflows/repair-finalizer.yml
+          git add .github/workflows/migrate-patch-vendor.yml .github/workflows/repair-finalizer.yml
+          git commit -s -m 'ci: scope generated-source whitespace check'
+          git push origin HEAD:refs/heads/integration/patch-vendor-authority
