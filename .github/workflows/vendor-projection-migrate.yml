@@ -21,7 +21,9 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: false
-      - name: Generate standard Go vendor projection
+      - name: Generate and test standard Go vendor projection
+        env:
+          PRODUCT_TAGS: with_dae,with_gvisor,with_tailscale
         run: |
           set -euxo pipefail
           python3 -m unittest discover -s tools/vendor -p 'test_*.py' -v
@@ -29,17 +31,12 @@ jobs:
           test -f vendor/modules.txt
           test -d vendor/github.com/daeuniverse/dae/ebpfinbound
           test -d vendor/github.com/sagernet/tailscale
-          python3 tools/vendor/verify.py --require-source
-      - name: Smoke dependency and product graphs
-        env:
-          PRODUCT_TAGS: with_dae,with_gvisor,with_tailscale
-        run: |
-          set -euxo pipefail
           (cd .vendor-work/dae/ebpfinbound && go test -run '^$' ./...)
           (cd .vendor-work/tailscale && go test -run '^$' ./tsnet ./net/netmon ./util/linuxfw)
           rm -rf .vendor-work
           go test -run '^$' -tags "$PRODUCT_TAGS" ./protocol/dae ./protocol/tailscale ./protocol/tun
           CGO_ENABLED=0 go build -trimpath -tags "$PRODUCT_TAGS" ./cmd/sing-box
+          python3 tools/vendor/verify.py --require-source
           git diff --check
       - name: Publish generated projection
         run: |
