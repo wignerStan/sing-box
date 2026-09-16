@@ -1,15 +1,19 @@
-# Generated vendor materializations
+# Generated Go vendor projection
 
-`vendor/` contains parent-owned ordinary files generated from exact
-`third_party/` source pins plus the ordered patch stacks in `patches/`.
+`vendor/` is a standard Go vendor projection generated from the main module
+graph. DAE and Tailscale packages come from pristine `third_party/` pins after
+the ordered parent-owned patch stacks under `patches/` are applied in the
+ignored `.vendor-work/` generation area.
 
-Do not edit these files directly. Run:
+Do not edit files below `vendor/` directly. Regenerate and verify with:
 
 ```sh
 python3 tools/vendor/materialize.py
-python3 tools/vendor/verify.py
+python3 tools/vendor/verify.py --require-source
 ```
 
-The source relationship, patch digests, patched Git tree, and materialized tree
-digest are recorded in `deps/vendor-lock.json`. No Git metadata, gitlink,
-submodule, or nested repository is permitted below `vendor/`.
+`vendor/modules.txt` is authoritative for Go's vendor-mode package mapping.
+`deps/vendor-lock.json` records source commits, patch digests, patched Git tree
+identities, the generated projection digest, and any repository-control files
+that Go's projection copied and the materializer removed. No Git metadata,
+gitlink, submodule, or nested repository is permitted below `vendor/`.

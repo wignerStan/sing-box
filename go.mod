@@ -205,6 +205,6 @@ require (
 	zombiezen.com/go/capnproto2 v2.18.2+incompatible // indirect
 )
 
-replace github.com/daeuniverse/dae/ebpfinbound => ./vendor/dae/ebpfinbound
+replace github.com/daeuniverse/dae/ebpfinbound => ./.vendor-work/dae/ebpfinbound
 
-replace github.com/sagernet/tailscale => ./vendor/tailscale
+replace github.com/sagernet/tailscale => ./.vendor-work/tailscale
