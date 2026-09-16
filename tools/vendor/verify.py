@@ -19,6 +19,7 @@ LOCK = ROOT / "deps/vendor-lock.json"
 VENDOR = ROOT / "vendor"
 METADATA_PATHS = {"MANIFEST.json", "README.md"}
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+REPOSITORY_METADATA_NAMES = {".gitattributes", ".gitignore", ".gitmodules"}
 
 EXPECTED_COMPONENTS = {
     "dae-ebpfinbound": {
@@ -124,7 +125,7 @@ def validate_excluded_repository_metadata(projection: dict[str, Any]) -> None:
         if not isinstance(item, dict) or set(item) != {"path", "kind", "size", "sha256"}:
             raise RuntimeError("invalid excluded repository metadata record")
         path = safe_relative_path(item["path"])
-        if PurePosixPath(path).name != ".gitmodules":
+        if PurePosixPath(path).name not in REPOSITORY_METADATA_NAMES:
             raise RuntimeError(f"unsupported excluded repository metadata: {path}")
         if path in observed:
             raise RuntimeError(f"duplicate excluded repository metadata: {path}")
@@ -146,8 +147,9 @@ def verify_projection(value: dict[str, Any]) -> None:
         raise RuntimeError("vendor/modules.txt is missing")
     for nested in VENDOR.rglob(".git"):
         raise RuntimeError(f"nested Git metadata below vendor: {nested}")
-    if any(path.name == ".gitmodules" for path in VENDOR.rglob(".gitmodules")):
-        raise RuntimeError("vendor contains .gitmodules")
+    for name in REPOSITORY_METADATA_NAMES:
+        if any(True for _ in VENDOR.rglob(name)):
+            raise RuntimeError(f"vendor contains {name}")
 
     projection = value.get("projection")
     if not isinstance(projection, dict):

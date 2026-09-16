@@ -161,6 +161,6 @@ jobs:
           test -f vendor/MANIFEST.json
           test -d vendor/github.com/daeuniverse/dae/ebpfinbound
           test -d vendor/github.com/sagernet/tailscale
-          test -z "$(find vendor -name .git -o -name .gitmodules -print)"
+          test -z "$(find vendor \( -name .git -o -name .gitmodules -o -name .gitattributes -o -name .gitignore \) -print)"
           python3 tools/vendor/verify.py
           CGO_ENABLED=0 go build -mod=vendor -trimpath -tags "$PRODUCT_TAGS" ./cmd/sing-box

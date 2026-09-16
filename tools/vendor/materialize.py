@@ -21,7 +21,7 @@ LOCK_PATH = ROOT / "deps/vendor-lock.json"
 MANIFEST_PATH = VENDOR_ROOT / "MANIFEST.json"
 README_PATH = VENDOR_ROOT / "README.md"
 METADATA_PATHS = {"MANIFEST.json", "README.md"}
-REPOSITORY_METADATA_NAMES = {".gitmodules"}
+REPOSITORY_METADATA_NAMES = {".gitattributes", ".gitignore", ".gitmodules"}
 
 COMPONENTS: tuple[dict[str, Any], ...] = (
     {
