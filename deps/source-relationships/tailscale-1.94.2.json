@@ -1,0 +1,13 @@
+{
+  "kind": "patched_third_party",
+  "materialization": null,
+  "name": "tailscale-1.94.2",
+  "public_api": "tailscale.com (standalone peer)",
+  "schema_version": "sing-box-patched-source/v1",
+  "series": "patches/tailscale-1.94.2/series",
+  "source": {
+    "commit": "2de4d317a8c2595904f1563ebd98fdcf843da275",
+    "path": "third_party/tailscale-1.94.2",
+    "url": "https://github.com/tailscale/tailscale.git"
+  }
+}

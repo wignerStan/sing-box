@@ -1,0 +1,602 @@
+diff --git a/ebpfinbound/attach_linux.go b/ebpfinbound/attach_linux.go
+index ef950d4bbe3e466ee9b61014d2cd5f2a59db6dc9..2d1eb938d9fbaca63eae9e2853f0a53e087f0bfc 100644
+--- a/ebpfinbound/attach_linux.go
++++ b/ebpfinbound/attach_linux.go
+@@ -9,7 +9,6 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"os"
+-	"runtime"
+ 	"sort"
+ 	"strings"
+ 
+@@ -521,13 +520,6 @@ func deleteOwnedQdisc(record ownedAttachmentRecord) error {
+ }
+ 
+ func withNamedNetNS(name string, function func() error) (err error) {
+-	runtime.LockOSThread()
+-	defer runtime.UnlockOSThread()
+-	host, err := netns.Get()
+-	if err != nil {
+-		return err
+-	}
+-	defer host.Close()
+ 	target, err := netns.GetFromName(name)
+ 	if err != nil {
+ 		if errors.Is(err, os.ErrNotExist) {
+@@ -536,11 +528,7 @@ func withNamedNetNS(name string, function func() error) (err error) {
+ 		return err
+ 	}
+ 	defer target.Close()
+-	if err := netns.Set(target); err != nil {
+-		return err
+-	}
+-	defer func() { err = errors.Join(err, netns.Set(host)) }()
+-	return function()
++	return withNetNSHandle(target, function)
+ }
+ 
+ func interfaceFiltersEmpty(link netlink.Link) (bool, error) {
+diff --git a/ebpfinbound/netns_linux.go b/ebpfinbound/netns_linux.go
+index af106737d88a70ae8cf9bddf57d575aecb2f8f64..330fdccfb92c9f0d13cd313abf9f46cbec5d6092 100644
+--- a/ebpfinbound/netns_linux.go
++++ b/ebpfinbound/netns_linux.go
+@@ -61,13 +61,13 @@ func newCaptureNetNS(ctx context.Context, log *slog.Logger, owner *ownershipLeas
+ 		}
+ 		return owner.SetSysctls(mutations)
+ 	})
+-	if err := ns.setup(ctx); err != nil {
++	if err := ns.setup(ctx, owner); err != nil {
+ 		return ns, err
+ 	}
+ 	return ns, nil
+ }
+ 
+-func (ns *captureNetNS) setup(ctx context.Context) (err error) {
++func (ns *captureNetNS) setup(ctx context.Context, owner *ownershipLease) (err error) {
+ 	runtime.LockOSThread()
+ 	defer runtime.UnlockOSThread()
+ 	ns.hostNS, err = netns.Get()
+@@ -112,6 +112,11 @@ func (ns *captureNetNS) setup(ctx context.Context) (err error) {
+ 		return fmt.Errorf("create named capture network namespace: %w", err)
+ 	}
+ 	ns.createdNamespace = true
++	if owner != nil {
++		if err := owner.SetNamespaceIdentity(ns.captureNS); err != nil {
++			return fmt.Errorf("record capture network namespace identity: %w", err)
++		}
++	}
+ 	if err := netns.Set(ns.hostNS); err != nil {
+ 		return fmt.Errorf("restore host network namespace: %w", err)
+ 	}
+@@ -294,7 +299,10 @@ func (ns *captureNetNS) Close() error {
+ 		runtime.UnlockOSThread()
+ 	}
+ 	if createdNamespace {
+-		if err := netns.DeleteNamed(captureNetNSName); err != nil && !errors.Is(err, os.ErrNotExist) {
++		identity, err := identifyNetworkNamespace(captureNS)
++		if err != nil {
++			errs = append(errs, err)
++		} else if err := deleteNamedNetworkNamespace(captureNetNSName, identity); err != nil {
+ 			errs = append(errs, err)
+ 		}
+ 	}
+@@ -311,6 +319,70 @@ func (ns *captureNetNS) Close() error {
+ 	return errors.Join(errs...)
+ }
+ 
++func identifyNetworkNamespace(namespace netns.NsHandle) (networkNamespaceIdentity, error) {
++	if !namespace.IsOpen() {
++		return networkNamespaceIdentity{}, errors.New("network namespace handle is closed")
++	}
++	var stat unix.Stat_t
++	if err := unix.Fstat(int(namespace), &stat); err != nil {
++		return networkNamespaceIdentity{}, fmt.Errorf("inspect network namespace identity: %w", err)
++	}
++	identity := networkNamespaceIdentity{device: uint64(stat.Dev), inode: stat.Ino}
++	if !identity.valid() {
++		return networkNamespaceIdentity{}, errors.New("network namespace has an invalid kernel identity")
++	}
++	return identity, nil
++}
++
++func deleteNamedNetworkNamespace(name string, expected networkNamespaceIdentity) error {
++	if !expected.valid() {
++		return errors.New("refuse to delete named network namespace without a kernel identity")
++	}
++	current, err := netns.GetFromName(name)
++	if err != nil {
++		if errors.Is(err, os.ErrNotExist) {
++			return nil
++		}
++		return fmt.Errorf("open named network namespace %s: %w", name, err)
++	}
++	actual, identityErr := identifyNetworkNamespace(current)
++	closeErr := current.Close()
++	if identityErr != nil {
++		return identityErr
++	}
++	if closeErr != nil {
++		return fmt.Errorf("close named network namespace %s: %w", name, closeErr)
++	}
++	if actual != expected {
++		return fmt.Errorf("refuse to delete named network namespace %s: kernel identity changed", name)
++	}
++	if err := netns.DeleteNamed(name); err != nil && !errors.Is(err, os.ErrNotExist) {
++		return fmt.Errorf("delete named network namespace %s: %w", name, err)
++	}
++	return nil
++}
++
++func withNetNSHandle(target netns.NsHandle, function func() error) (err error) {
++	if !target.IsOpen() {
++		return errors.New("network namespace handle is closed")
++	}
++	runtime.LockOSThread()
++	defer runtime.UnlockOSThread()
++	host, err := netns.Get()
++	if err != nil {
++		return err
++	}
++	defer host.Close()
++	if err := netns.Set(target); err != nil {
++		return err
++	}
++	defer func() { err = errors.Join(err, netns.Set(host)) }()
++	if function == nil {
++		return nil
++	}
++	return function()
++}
++
+ func deleteOwnedLink(name, token string) error {
+ 	link, err := netlink.LinkByName(name)
+ 	if err != nil {
+diff --git a/ebpfinbound/ownership_linux.go b/ebpfinbound/ownership_linux.go
+index c12a942ca0ce820e88f212b8e55f4a7ddf83c73f..4d0eff6b0bd3335e6d9288ebe08b63f88b6524de 100644
+--- a/ebpfinbound/ownership_linux.go
++++ b/ebpfinbound/ownership_linux.go
+@@ -43,19 +43,30 @@ type ownedAttachmentRecord struct {
+ }
+ 
+ type ownershipRecord struct {
+-	Version       int                     `json:"version"`
+-	Token         string                  `json:"token"`
+-	PID           int                     `json:"pid"`
+-	BootID        string                  `json:"boot_id"`
+-	StartedAt     time.Time               `json:"started_at"`
+-	Released      bool                    `json:"released,omitempty"`
+-	Namespace     string                  `json:"namespace"`
+-	HostLink      string                  `json:"host_link"`
+-	PeerLink      string                  `json:"peer_link"`
+-	LANInterfaces []string                `json:"lan_interfaces,omitempty"`
+-	WANInterfaces []string                `json:"wan_interfaces,omitempty"`
+-	Attachments   []ownedAttachmentRecord `json:"attachments,omitempty"`
+-	Sysctls       []sysctlMutation        `json:"sysctls,omitempty"`
++	Version         int                     `json:"version"`
++	Token           string                  `json:"token"`
++	PID             int                     `json:"pid"`
++	BootID          string                  `json:"boot_id"`
++	StartedAt       time.Time               `json:"started_at"`
++	Released        bool                    `json:"released,omitempty"`
++	Namespace       string                  `json:"namespace"`
++	NamespaceDevice uint64                  `json:"namespace_device,omitempty"`
++	NamespaceInode  uint64                  `json:"namespace_inode,omitempty"`
++	HostLink        string                  `json:"host_link"`
++	PeerLink        string                  `json:"peer_link"`
++	LANInterfaces   []string                `json:"lan_interfaces,omitempty"`
++	WANInterfaces   []string                `json:"wan_interfaces,omitempty"`
++	Attachments     []ownedAttachmentRecord `json:"attachments,omitempty"`
++	Sysctls         []sysctlMutation        `json:"sysctls,omitempty"`
++}
++
++type networkNamespaceIdentity struct {
++	device uint64
++	inode  uint64
++}
++
++func (identity networkNamespaceIdentity) valid() bool {
++	return identity.device != 0 && identity.inode != 0
+ }
+ 
+ type ownershipLease struct {
+@@ -134,6 +145,23 @@ func (l *ownershipLease) Token() string {
+ 	defer l.mu.Unlock()
+ 	return l.record.Token
+ }
++func (l *ownershipLease) SetNamespaceIdentity(namespace netns.NsHandle) error {
++	if l == nil {
++		return nil
++	}
++	identity, err := identifyNetworkNamespace(namespace)
++	if err != nil {
++		return err
++	}
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	if l.closed {
++		return errors.New("ownership lease is closed")
++	}
++	l.record.NamespaceDevice = identity.device
++	l.record.NamespaceInode = identity.inode
++	return l.persistLocked()
++}
+ func (l *ownershipLease) SetAttachments(records []ownedAttachmentRecord) error {
+ 	if l == nil {
+ 		return nil
+@@ -209,6 +237,10 @@ func (l *ownershipLease) persistLocked() error {
+ 	if err := os.Rename(ownerRecordTemp(), ownerRecordPath()); err != nil {
+ 		return fmt.Errorf("publish ownership record: %w", err)
+ 	}
++	return syncRuntimeStateDirectory()
++}
++
++func syncRuntimeStateDirectory() error {
+ 	directory, err := os.Open(runtimeStateDirectory)
+ 	if err != nil {
+ 		return fmt.Errorf("open ownership directory: %w", err)
+@@ -223,6 +255,30 @@ func (l *ownershipLease) persistLocked() error {
+ 	return nil
+ }
+ 
++func removeOwnershipRecord(expectedToken string) error {
++	raw, err := os.ReadFile(ownerRecordPath())
++	if errors.Is(err, os.ErrNotExist) {
++		return nil
++	}
++	if err != nil {
++		return fmt.Errorf("read current ownership record: %w", err)
++	}
++	var current ownershipRecord
++	if err := json.Unmarshal(raw, &current); err != nil {
++		return fmt.Errorf("decode current ownership record: %w", err)
++	}
++	if err := validateOwnershipRecord(current); err != nil {
++		return fmt.Errorf("validate current ownership record: %w", err)
++	}
++	if current.Token != expectedToken {
++		return errors.New("refuse to remove ownership record with a different token")
++	}
++	if err := os.Remove(ownerRecordPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
++		return fmt.Errorf("remove ownership record: %w", err)
++	}
++	return syncRuntimeStateDirectory()
++}
++
+ func (l *ownershipLease) Close() error {
+ 	return l.release(true)
+ }
+@@ -241,7 +297,14 @@ func (l *ownershipLease) release(removeRecord bool) error {
+ 		return nil
+ 	}
+ 	var errs []error
+-	if !removeRecord {
++	if removeRecord {
++		// Publish the clean-release state before removing the journal. If record
++		// removal fails, stale cleanup can retry even while this process lives.
++		l.record.Released = true
++		if err := l.persistLocked(); err != nil {
++			errs = append(errs, fmt.Errorf("mark ownership record released before removal: %w", err))
++		}
++	} else {
+ 		l.record.Released = true
+ 		if err := l.persistLocked(); err != nil {
+ 			errs = append(errs, fmt.Errorf("mark ownership record released: %w", err))
+@@ -253,16 +316,7 @@ func (l *ownershipLease) release(removeRecord bool) error {
+ 	token := l.record.Token
+ 	l.mu.Unlock()
+ 	if removeRecord {
+-		if raw, err := os.ReadFile(ownerRecordPath()); err == nil {
+-			var current ownershipRecord
+-			if decodeErr := json.Unmarshal(raw, &current); decodeErr != nil {
+-				errs = append(errs, fmt.Errorf("decode current ownership record: %w", decodeErr))
+-			} else if current.Token == token {
+-				if err := os.Remove(ownerRecordPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+-					errs = append(errs, err)
+-				}
+-			}
+-		} else if !errors.Is(err, os.ErrNotExist) {
++		if err := removeOwnershipRecord(token); err != nil {
+ 			errs = append(errs, err)
+ 		}
+ 	}
+@@ -320,23 +374,72 @@ func CleanupStale(ctx context.Context) error {
+ 	if !record.Released && record.BootID == bootID && pidAlive(record.PID) {
+ 		return fmt.Errorf("recorded runtime pid %d is still active", record.PID)
+ 	}
+-	var errs []error
+-	if err := cleanupStaleAttachments(record.Attachments); err != nil {
+-		errs = append(errs, err)
++	namespace, err := inspectRecordedNamespace(record)
++	if err != nil {
++		return err
+ 	}
++	attachmentErr := cleanupStaleAttachments(record.Attachments)
++	var errs []error
+ 	if err := restoreRecordedSysctls(record.Sysctls); err != nil {
+ 		errs = append(errs, err)
+ 	}
+-	if err := cleanupRecordedNetNS(record); err != nil {
++	if attachmentErr != nil {
++		// Keep the namespace available for a later retry of any attachment it
++		// still contains. Host sysctls are independent and safe to restore now.
++		return errors.Join(attachmentErr, errors.Join(errs...))
++	}
++	if err := cleanupRecordedNetNS(record, namespace); err != nil {
+ 		errs = append(errs, err)
+ 	}
+ 	if len(errs) != 0 {
+ 		return errors.Join(errs...)
+ 	}
+-	return os.Remove(ownerRecordPath())
++	return removeOwnershipRecord(record.Token)
++}
++
++type recordedNamespace struct {
++	present  bool
++	identity networkNamespaceIdentity
++}
++
++func inspectRecordedNamespace(record ownershipRecord) (recordedNamespace, error) {
++	target, err := netns.GetFromName(record.Namespace)
++	if err != nil {
++		if errors.Is(err, os.ErrNotExist) {
++			return recordedNamespace{}, nil
++		}
++		return recordedNamespace{}, fmt.Errorf("open recorded network namespace: %w", err)
++	}
++	defer target.Close()
++	actual, err := identifyNetworkNamespace(target)
++	if err != nil {
++		return recordedNamespace{}, err
++	}
++	expected := networkNamespaceIdentity{device: record.NamespaceDevice, inode: record.NamespaceInode}
++	if expected.valid() {
++		if actual != expected {
++			return recordedNamespace{}, errors.New("refuse recorded network namespace: kernel identity changed")
++		}
++		return recordedNamespace{present: true, identity: actual}, nil
++	}
++	// Records written before namespace identities were added are accepted only
++	// when their private peer still carries the journal's random ownership token.
++	if err := withNetNSHandle(target, func() error {
++		link, err := netlink.LinkByName(record.PeerLink)
++		if err != nil {
++			return fmt.Errorf("verify legacy recorded network namespace peer: %w", err)
++		}
++		if link.Attrs() == nil || link.Attrs().Alias != record.Token {
++			return errors.New("legacy recorded network namespace peer has a different ownership token")
++		}
++		return nil
++	}); err != nil {
++		return recordedNamespace{}, fmt.Errorf("refuse recorded network namespace without matching identity: %w", err)
++	}
++	return recordedNamespace{present: true, identity: actual}, nil
+ }
+ 
+-func cleanupRecordedNetNS(record ownershipRecord) error {
++func cleanupRecordedNetNS(record ownershipRecord, namespace recordedNamespace) error {
+ 	var errs []error
+ 	for _, name := range []string{record.PeerLink, record.HostLink} {
+ 		if name == "" {
+@@ -357,8 +460,8 @@ func cleanupRecordedNetNS(record ownershipRecord) error {
+ 			errs = append(errs, err)
+ 		}
+ 	}
+-	if record.Namespace != "" {
+-		if err := netns.DeleteNamed(record.Namespace); err != nil && !errors.Is(err, os.ErrNotExist) {
++	if len(errs) == 0 && namespace.present {
++		if err := deleteNamedNetworkNamespace(record.Namespace, namespace.identity); err != nil {
+ 			errs = append(errs, err)
+ 		}
+ 	}
+@@ -383,6 +486,9 @@ func validateOwnershipRecord(record ownershipRecord) error {
+ 	if record.Namespace != captureNetNSName || record.HostLink != captureHostLink || record.PeerLink != capturePeerLink {
+ 		return errors.New("ownership record names do not match the provider's fixed resources")
+ 	}
++	if (record.NamespaceDevice == 0) != (record.NamespaceInode == 0) {
++		return errors.New("incomplete recorded network namespace identity")
++	}
+ 	if len(record.LANInterfaces) > 64 || len(record.WANInterfaces) > 64 || len(record.Attachments) > 64 || len(record.Sysctls) > 128 {
+ 		return errors.New("ownership record exceeds resource limits")
+ 	}
+diff --git a/ebpfinbound/ownership_linux_test.go b/ebpfinbound/ownership_linux_test.go
+index 1cb5c2f2f2742da40b1991f08bd62d5fd87a2601..820c12407f8317cb65991a38590210a6773cd240 100644
+--- a/ebpfinbound/ownership_linux_test.go
++++ b/ebpfinbound/ownership_linux_test.go
+@@ -21,17 +21,18 @@ func TestOwnershipRecordValidation(t *testing.T) {
+ 	}
+ 
+ 	tests := map[string]func(*ownershipRecord){
+-		"version":      func(record *ownershipRecord) { record.Version++ },
+-		"token":        func(record *ownershipRecord) { record.Token = "not-a-token" },
+-		"pid":          func(record *ownershipRecord) { record.PID = 0 },
+-		"namespace":    func(record *ownershipRecord) { record.Namespace = "other" },
+-		"host link":    func(record *ownershipRecord) { record.HostLink = "other" },
+-		"attachment":   func(record *ownershipRecord) { record.Attachments[0].Name = "foreign" },
+-		"interface":    func(record *ownershipRecord) { record.LANInterfaces[0] = "bad/name" },
+-		"wrong role":   func(record *ownershipRecord) { record.Attachments[1].Interface = "wan0" },
+-		"duplicate":    func(record *ownershipRecord) { record.Attachments = append(record.Attachments, record.Attachments[0]) },
+-		"sysctl path":  func(record *ownershipRecord) { record.Sysctls[0].Path = "/proc/sys/kernel/core_pattern" },
+-		"sysctl value": func(record *ownershipRecord) { record.Sysctls[0].Applied = "unsafe" },
++		"version":            func(record *ownershipRecord) { record.Version++ },
++		"token":              func(record *ownershipRecord) { record.Token = "not-a-token" },
++		"pid":                func(record *ownershipRecord) { record.PID = 0 },
++		"namespace":          func(record *ownershipRecord) { record.Namespace = "other" },
++		"namespace identity": func(record *ownershipRecord) { record.NamespaceInode = 0 },
++		"host link":          func(record *ownershipRecord) { record.HostLink = "other" },
++		"attachment":         func(record *ownershipRecord) { record.Attachments[0].Name = "foreign" },
++		"interface":          func(record *ownershipRecord) { record.LANInterfaces[0] = "bad/name" },
++		"wrong role":         func(record *ownershipRecord) { record.Attachments[1].Interface = "wan0" },
++		"duplicate":          func(record *ownershipRecord) { record.Attachments = append(record.Attachments, record.Attachments[0]) },
++		"sysctl path":        func(record *ownershipRecord) { record.Sysctls[0].Path = "/proc/sys/kernel/core_pattern" },
++		"sysctl value":       func(record *ownershipRecord) { record.Sysctls[0].Applied = "unsafe" },
+ 	}
+ 	for name, mutate := range tests {
+ 		t.Run(name, func(t *testing.T) {
+@@ -46,6 +47,12 @@ func TestOwnershipRecordValidation(t *testing.T) {
+ 			}
+ 		})
+ 	}
++	legacy := valid
++	legacy.NamespaceDevice = 0
++	legacy.NamespaceInode = 0
++	if err := validateOwnershipRecord(legacy); err != nil {
++		t.Fatalf("legacy record without namespace identity: %v", err)
++	}
+ }
+ 
+ func TestOwnershipLeaseReleaseModes(t *testing.T) {
+@@ -97,18 +104,40 @@ func TestMissingNetlinkErrorClassification(t *testing.T) {
+ 	}
+ }
+ 
++func TestRemoveOwnershipRecordRejectsDifferentToken(t *testing.T) {
++	originalDirectory := runtimeStateDirectory
++	runtimeStateDirectory = t.TempDir()
++	t.Cleanup(func() { runtimeStateDirectory = originalDirectory })
++
++	lease, err := acquireOwnership(PreflightReport{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := removeOwnershipRecord("dae-ebpfinbound:ffeeddccbbaa99887766554433221100"); err == nil {
++		t.Fatal("ownership record with a different token was removed")
++	}
++	if _, err := os.Stat(ownerRecordPath()); err != nil {
++		t.Fatalf("ownership record was not preserved: %v", err)
++	}
++	if err := lease.Close(); err != nil {
++		t.Fatal(err)
++	}
++}
++
+ func testOwnershipRecord() ownershipRecord {
+ 	return ownershipRecord{
+-		Version:       ownershipRecordVersion,
+-		Token:         "dae-ebpfinbound:00112233445566778899aabbccddeeff",
+-		PID:           123,
+-		BootID:        "test-boot",
+-		StartedAt:     time.Unix(1, 0).UTC(),
+-		Namespace:     captureNetNSName,
+-		HostLink:      captureHostLink,
+-		PeerLink:      capturePeerLink,
+-		LANInterfaces: []string{"lan0"},
+-		WANInterfaces: []string{"wan0"},
++		Version:         ownershipRecordVersion,
++		Token:           "dae-ebpfinbound:00112233445566778899aabbccddeeff",
++		PID:             123,
++		BootID:          "test-boot",
++		StartedAt:       time.Unix(1, 0).UTC(),
++		Namespace:       captureNetNSName,
++		NamespaceDevice: 1,
++		NamespaceInode:  2,
++		HostLink:        captureHostLink,
++		PeerLink:        capturePeerLink,
++		LANInterfaces:   []string{"lan0"},
++		WANInterfaces:   []string{"wan0"},
+ 		Attachments: []ownedAttachmentRecord{
+ 			{
+ 				Interface: captureHostLink,
+diff --git a/ebpfinbound/runtime_integration_linux_test.go b/ebpfinbound/runtime_integration_linux_test.go
+index da79ff975afb137596dfec7825c3eb07e97d202a..fc22f4d6e51869b05073f53cdb2f4f77a12b988c 100644
+--- a/ebpfinbound/runtime_integration_linux_test.go
++++ b/ebpfinbound/runtime_integration_linux_test.go
+@@ -7,6 +7,7 @@ package ebpfinbound
+ import (
+ 	"bytes"
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"net"
+@@ -114,24 +115,81 @@ func TestPrivilegedCaptureLifecycleAndTraffic(t *testing.T) {
+ 
+ 	// A process crash leaves persistent TC/netns resources behind. The
+ 	// ownership journal must make their removal safe and complete.
+-	command := exec.Command(os.Args[0], "-test.run=^TestPrivilegedCaptureLifecycleAndTraffic$", "-test.v")
+-	command.Env = append(os.Environ(), integrationChildEnv+"=1")
+-	output, err := command.CombinedOutput()
++	runCrashedIntegrationRuntime(t)
++	raw, err := os.ReadFile(ownerRecordPath())
+ 	if err != nil {
+-		t.Fatalf("crash-simulation child failed: %v\n%s", err, output)
++		t.Fatal(err)
+ 	}
+-	if _, err := os.Stat(ownerRecordPath()); err != nil {
+-		t.Fatalf("crashed runtime did not leave an ownership record: %v\n%s", err, output)
++	var legacyRecord ownershipRecord
++	if err := json.Unmarshal(raw, &legacyRecord); err != nil {
++		t.Fatal(err)
++	}
++	legacyRecord.NamespaceDevice = 0
++	legacyRecord.NamespaceInode = 0
++	raw, err = json.MarshalIndent(legacyRecord, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(ownerRecordPath(), append(raw, '\n'), 0o600); err != nil {
++		t.Fatal(err)
+ 	}
+-	assertCaptureAttached(t)
+ 	if err := CleanupStale(context.Background()); err != nil {
+-		t.Fatalf("clean crashed runtime: %v\n%s", err, output)
++		t.Fatalf("clean crashed runtime from a legacy journal: %v", err)
+ 	}
+ 	assertProviderGone(t)
+ 	assertIntegrationSysctls(t, beforeSysctls)
+ 	if err := CleanupStale(context.Background()); err != nil {
+ 		t.Fatalf("idempotent stale cleanup: %v", err)
+ 	}
++
++	// Replacing the well-known namespace name must never authorize deletion of
++	// the replacement. Once it is removed, cleanup can safely resume using the
++	// remaining journal entries.
++	runCrashedIntegrationRuntime(t)
++	raw, err = os.ReadFile(ownerRecordPath())
++	if err != nil {
++		t.Fatal(err)
++	}
++	var record ownershipRecord
++	if err := json.Unmarshal(raw, &record); err != nil {
++		t.Fatal(err)
++	}
++	if record.NamespaceDevice == 0 || record.NamespaceInode == 0 {
++		t.Fatal("crashed runtime did not persist its network namespace identity")
++	}
++	mustRunIP(t, "netns", "del", captureNetNSName)
++	mustRunIP(t, "netns", "add", captureNetNSName)
++	if err := CleanupStale(context.Background()); err == nil || !strings.Contains(err.Error(), "kernel identity changed") {
++		t.Fatalf("stale cleanup did not reject a replacement namespace: %v", err)
++	}
++	if namespace, err := netns.GetFromName(captureNetNSName); err != nil {
++		t.Fatalf("replacement namespace was deleted: %v", err)
++	} else {
++		namespace.Close()
++	}
++	if _, err := os.Stat(ownerRecordPath()); err != nil {
++		t.Fatalf("replacement refusal did not preserve ownership journal: %v", err)
++	}
++	mustRunIP(t, "netns", "del", captureNetNSName)
++	if err := CleanupStale(context.Background()); err != nil {
++		t.Fatalf("resume stale cleanup after removing replacement namespace: %v", err)
++	}
++	assertProviderGone(t)
++	assertIntegrationSysctls(t, beforeSysctls)
++}
++
++func runCrashedIntegrationRuntime(t *testing.T) {
++	t.Helper()
++	command := exec.Command(os.Args[0], "-test.run=^TestPrivilegedCaptureLifecycleAndTraffic$", "-test.v")
++	command.Env = append(os.Environ(), integrationChildEnv+"=1")
++	output, err := command.CombinedOutput()
++	if err != nil {
++		t.Fatalf("crash-simulation child failed: %v\n%s", err, output)
++	}
++	if _, err := os.Stat(ownerRecordPath()); err != nil {
++		t.Fatalf("crashed runtime did not leave an ownership record: %v\n%s", err, output)
++	}
++	assertCaptureAttached(t)
+ }
+ 
+ func testStartupCollisionRollback(t *testing.T) {
