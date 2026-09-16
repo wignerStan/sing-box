@@ -408,6 +408,8 @@ github.com/vishvananda/netns v0.0.5 h1:DfiHV+j8bA32MFM7bfEunvT8IAqQ/NzSJHtcmW5zd
 github.com/vishvananda/netns v0.0.5/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 github.com/wignerStan/dae/ebpfinbound v0.0.0-20260907212147-03db16e3d761 h1:53+CLtTJbJNWqKrSE4FZ8K8eO6fYjfuNsx4BG2Z0nJU=
 github.com/wignerStan/dae/ebpfinbound v0.0.0-20260907212147-03db16e3d761/go.mod h1:mQmnJ6b1Ucu3v2K3udMwKWP7eSANFL672P7EdC4Gti0=
+github.com/wignerStan/tailscale v0.0.0-20260916025124-ddc87a687baf h1:0rtcgQQGDhbd+L79WjBXteUlW64Yj4746By2I4Bdlqs=
+github.com/wignerStan/tailscale v0.0.0-20260916025124-ddc87a687baf/go.mod h1:WLUSOPmTcf7VN9gLCe01qUSIvD+/cKC177neENyZPkI=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 h1:ilQV1hzziu+LLM3zUTJ0trRztfwgjqKnBWNtSRkbmwM=
