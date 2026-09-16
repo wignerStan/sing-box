@@ -1,10 +1,10 @@
-name: Inspect patch vendor migration
+name: Integrate native Tailscale line
 on:
   push:
     branches: [integration/patch-vendor-authority]
     paths: [.github/workflows/migrate-patch-vendor.yml]
 permissions:
-  contents: read
+  contents: write
 jobs:
   integrate:
     runs-on: ubuntu-24.04
@@ -14,17 +14,22 @@ jobs:
         with:
           ref: integration/patch-vendor-authority
           fetch-depth: 0
-          persist-credentials: false
-      - name: Inspect reviewed native Tailscale merge
+      - name: Merge reviewed native Tailscale line
         run: |
           set -euxo pipefail
-          git config user.name 'migration-check'
-          git config user.email 'migration-check@example.invalid'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch origin fix/tailscale-cgnat-direct-udp
           if ! git merge --no-ff --no-commit origin/fix/tailscale-cgnat-direct-udp; then
-            git status --short
-            git diff --name-only --diff-filter=U
-            exit 1
+            test "$(git diff --name-only --diff-filter=U | sort | tr '\n' ' ')" = 'go.mod go.sum '
+            git show :3:go.sum > "$RUNNER_TEMP/theirs.go.sum"
+            git checkout --ours go.mod go.sum
+            grep -q '^replace github.com/sagernet/tailscale ' go.mod || printf '\nreplace github.com/sagernet/tailscale => github.com/wignerStan/tailscale v0.0.0-20260916025124-ddc87a687baf\n' >> go.mod
+            cat "$RUNNER_TEMP/theirs.go.sum" >> go.sum
+            LC_ALL=C sort -u go.sum -o go.sum
+            git add go.mod go.sum
           fi
+          test -z "$(git diff --name-only --diff-filter=U)"
           git diff --check --cached
-          git status --short
+          git commit --no-edit
+          git push origin HEAD:refs/heads/integration/patch-vendor-authority
