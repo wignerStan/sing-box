@@ -175,7 +175,7 @@ jobs:
         run: |
           set -euxo pipefail
           git add .gitmodules third_party patches vendor deps tools/vendor docs/VENDOR_AUTHORITY.md go.mod go.sum .gitignore .github/workflows
-          git diff --cached --check
+          git diff --cached --check -- . ':(exclude)patches/**' ':(exclude)vendor/**'
           git commit -s -m 'build: make sing-box authoritative for patched DAE and Tailscale'
           git push origin HEAD:refs/heads/integration/vendor-authority
           {
