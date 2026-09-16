@@ -22,15 +22,17 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          submodules: recursive
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
           cache: false
-      - name: Verify exact source and build
+      - name: Verify tracked release source and build
         env:
           TARGET: ${{ matrix.target }}
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+          GOTOOLCHAIN: 'local'
         run: |
           set -euxo pipefail
           python3 tools/vendor/verify.py
@@ -39,7 +41,7 @@ jobs:
           version=${RELEASE_TAG#v}
           package="$RUNNER_TEMP/package"
           mkdir -p "$package"
-          CGO_ENABLED=0 GOFLAGS=-mod=mod GOOS="$os" GOARCH="$arch" go build -trimpath -tags "$PRODUCT_TAGS" -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$package/sing-box" ./cmd/sing-box
+          CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -mod=vendor -trimpath -tags "$PRODUCT_TAGS" -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$package/sing-box" ./cmd/sing-box
           chmod +x "$package/sing-box"
           "$package/sing-box" version
           git rev-parse HEAD > "$package/SOURCE_COMMIT"
@@ -91,9 +93,18 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           persist-credentials: false
-      - name: Archive tracked release source
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Verify and archive tracked release source
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+          GOTOOLCHAIN: 'local'
         run: |
           set -euxo pipefail
+          python3 tools/vendor/verify.py
           prefix="sing-box-${RELEASE_TAG}/"
           git archive --format=tar --prefix="$prefix" HEAD | gzip -n > "sing-box-${RELEASE_TAG}-source.tar.gz"
           sha256sum "sing-box-${RELEASE_TAG}-source.tar.gz" > "sing-box-${RELEASE_TAG}-source.tar.gz.sha256"
