@@ -4,6 +4,9 @@ on:
     branches: [integration/vendor-authority]
     paths:
       - '.github/workflows/vendor-projection-migrate.yml'
+      - 'tools/vendor/materialize.py'
+      - 'tools/vendor/verify.py'
+      - 'tools/vendor/test_digest_portability.py'
 permissions:
   contents: write
 jobs:
@@ -31,6 +34,7 @@ jobs:
           test -f vendor/modules.txt
           test -d vendor/github.com/daeuniverse/dae/ebpfinbound
           test -d vendor/github.com/sagernet/tailscale
+          test -z "$(find vendor -name .git -o -name .gitmodules -print)"
           (cd .vendor-work/dae/ebpfinbound && go test -run '^$' ./...)
           (cd .vendor-work/tailscale && go test -run '^$' ./tsnet ./net/netmon ./util/linuxfw)
           rm -rf .vendor-work
