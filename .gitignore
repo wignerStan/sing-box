@@ -12,7 +12,7 @@
 /*.aar
 /*.xcframework/
 /experimental/libbox/*.aar
-/experimental/libbox/*.xcframework/
+/experimental/libbox/*.xcframework
 /experimental/libbox/*.nupkg
 .DS_Store
 /config.d/
@@ -22,3 +22,4 @@ AGENTS.md
 /.claude/
 
 /.vendor-work/
+/.vendor-generated/
