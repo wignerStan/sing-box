@@ -1,10 +1,11 @@
 name: Vendor-authoritative release
 on:
   push:
-    tags: ['v1.14.0-wigner.*']
+    branches: [release/v1.14.0-wigner.1]
 permissions:
   contents: write
 env:
+  RELEASE_TAG: v1.14.0-wigner.1
   PRODUCT_TAGS: with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
 jobs:
   product:
@@ -35,19 +36,20 @@ jobs:
           python3 tools/vendor/verify.py
           os=${TARGET%-*}
           arch=${TARGET#*-}
-          version=${GITHUB_REF_NAME#v}
-          mkdir -p "$RUNNER_TEMP/package"
-          CGO_ENABLED=0 GOFLAGS=-mod=mod GOOS="$os" GOARCH="$arch" go build -trimpath -tags "$PRODUCT_TAGS" -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$RUNNER_TEMP/package/sing-box" ./cmd/sing-box
-          chmod +x "$RUNNER_TEMP/package/sing-box"
-          "$RUNNER_TEMP/package/sing-box" version
-          git rev-parse HEAD > "$RUNNER_TEMP/package/SOURCE_COMMIT"
-          cp deps/vendor-lock.json "$RUNNER_TEMP/package/VENDOR_LOCK.json"
-          (cd "$RUNNER_TEMP/package" && shasum -a 256 sing-box SOURCE_COMMIT VENDOR_LOCK.json > SHA256SUMS)
-          tar -C "$RUNNER_TEMP/package" -czf "$RUNNER_TEMP/sing-box-${GITHUB_REF_NAME}-${TARGET}.tar.gz" .
+          version=${RELEASE_TAG#v}
+          package="$RUNNER_TEMP/package"
+          mkdir -p "$package"
+          CGO_ENABLED=0 GOFLAGS=-mod=mod GOOS="$os" GOARCH="$arch" go build -trimpath -tags "$PRODUCT_TAGS" -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$package/sing-box" ./cmd/sing-box
+          chmod +x "$package/sing-box"
+          "$package/sing-box" version
+          git rev-parse HEAD > "$package/SOURCE_COMMIT"
+          cp deps/vendor-lock.json "$package/VENDOR_LOCK.json"
+          (cd "$package" && shasum -a 256 sing-box SOURCE_COMMIT VENDOR_LOCK.json > SHA256SUMS)
+          tar -C "$package" -czf "$RUNNER_TEMP/sing-box-${RELEASE_TAG}-${TARGET}.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
-          name: sing-box-${{ github.ref_name }}-${{ matrix.target }}
-          path: ${{ runner.temp }}/sing-box-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          name: sing-box-${{ env.RELEASE_TAG }}-${{ matrix.target }}
+          path: ${{ runner.temp }}/sing-box-${{ env.RELEASE_TAG }}-${{ matrix.target }}.tar.gz
           if-no-files-found: error
           retention-days: 30
 
@@ -73,8 +75,8 @@ jobs:
           (cd "$work" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o "$package/tailscale" ./cmd/tailscale)
           (cd "$work" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o "$package/tailscaled" ./cmd/tailscaled)
           cp "$work/.sing-box-backport-tree" "$package/PATCHED_TREE"
-          cp deps/vendor-lock.json "$package/SING_BOX_VENDOR_LOCK.json"
-          (cd "$package" && sha256sum tailscale tailscaled PATCHED_TREE SING_BOX_VENDOR_LOCK.json > SHA256SUMS)
+          cp deps/tailscale-1.94.2-lock.json "$package/BACKPORT_LOCK.json"
+          (cd "$package" && sha256sum tailscale tailscaled PATCHED_TREE BACKPORT_LOCK.json > SHA256SUMS)
           tar -C "$package" -czf "$RUNNER_TEMP/tailscale-v1.94.2-cgnat-wigner.1-linux-amd64.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
@@ -92,15 +94,15 @@ jobs:
       - name: Archive tracked release source
         run: |
           set -euxo pipefail
-          prefix="sing-box-${GITHUB_REF_NAME}/"
-          git archive --format=tar --prefix="$prefix" HEAD | gzip -n > "sing-box-${GITHUB_REF_NAME}-source.tar.gz"
-          sha256sum "sing-box-${GITHUB_REF_NAME}-source.tar.gz" > "sing-box-${GITHUB_REF_NAME}-source.tar.gz.sha256"
+          prefix="sing-box-${RELEASE_TAG}/"
+          git archive --format=tar --prefix="$prefix" HEAD | gzip -n > "sing-box-${RELEASE_TAG}-source.tar.gz"
+          sha256sum "sing-box-${RELEASE_TAG}-source.tar.gz" > "sing-box-${RELEASE_TAG}-source.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: sing-box-${{ github.ref_name }}-source
+          name: sing-box-${{ env.RELEASE_TAG }}-source
           path: |
-            sing-box-${{ github.ref_name }}-source.tar.gz
-            sing-box-${{ github.ref_name }}-source.tar.gz.sha256
+            sing-box-${{ env.RELEASE_TAG }}-source.tar.gz
+            sing-box-${{ env.RELEASE_TAG }}-source.tar.gz.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -118,4 +120,4 @@ jobs:
         run: |
           set -euxo pipefail
           find release-assets -maxdepth 1 -type f -print -exec sha256sum {} \; | sort
-          gh release create "$GITHUB_REF_NAME" release-assets/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          gh release create "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes --title "$RELEASE_TAG"
