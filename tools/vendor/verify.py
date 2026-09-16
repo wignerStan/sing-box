@@ -7,7 +7,8 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import stat
 import subprocess
 import sys
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LOCK = ROOT / "deps/vendor-lock.json"
 VENDOR = ROOT / "vendor"
 METADATA_PATHS = {"MANIFEST.json", "README.md"}
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 EXPECTED_COMPONENTS = {
     "dae-ebpfinbound": {
@@ -104,6 +106,37 @@ def tree_sha256(root: Path, *, excluded: Iterable[str] = ()) -> tuple[str, int]:
     return digest.hexdigest(), entries
 
 
+def safe_relative_path(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise RuntimeError("metadata receipt path must be a non-empty string")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or "\\" in value or path.as_posix() != value:
+        raise RuntimeError(f"unsafe metadata receipt path: {value!r}")
+    return value
+
+
+def validate_excluded_repository_metadata(projection: dict[str, Any]) -> None:
+    receipt = projection.get("excluded_repository_metadata")
+    if not isinstance(receipt, list):
+        raise RuntimeError("excluded repository metadata receipt is missing")
+    observed: set[str] = set()
+    for item in receipt:
+        if not isinstance(item, dict) or set(item) != {"path", "kind", "size", "sha256"}:
+            raise RuntimeError("invalid excluded repository metadata record")
+        path = safe_relative_path(item["path"])
+        if PurePosixPath(path).name != ".gitmodules":
+            raise RuntimeError(f"unsupported excluded repository metadata: {path}")
+        if path in observed:
+            raise RuntimeError(f"duplicate excluded repository metadata: {path}")
+        observed.add(path)
+        if item["kind"] != "file":
+            raise RuntimeError(f"excluded repository metadata must be a regular file: {path}")
+        if not isinstance(item["size"], int) or item["size"] < 0:
+            raise RuntimeError(f"invalid excluded repository metadata size: {path}")
+        if not isinstance(item["sha256"], str) or not SHA256.fullmatch(item["sha256"]):
+            raise RuntimeError(f"invalid excluded repository metadata digest: {path}")
+
+
 def source_initialized(path: Path) -> bool:
     return (path / ".git").exists()
 
@@ -121,6 +154,7 @@ def verify_projection(value: dict[str, Any]) -> None:
         raise RuntimeError("vendor lock projection is missing")
     if projection.get("path") != "vendor" or projection.get("format") != "go-mod-vendor":
         raise RuntimeError("vendor lock does not describe the standard Go projection")
+    validate_excluded_repository_metadata(projection)
     actual_sha256, actual_entries = tree_sha256(VENDOR, excluded=METADATA_PATHS)
     if actual_sha256 != projection.get("tree_sha256"):
         raise RuntimeError("Go vendor projection tree mismatch")

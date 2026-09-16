@@ -21,6 +21,7 @@ LOCK_PATH = ROOT / "deps/vendor-lock.json"
 MANIFEST_PATH = VENDOR_ROOT / "MANIFEST.json"
 README_PATH = VENDOR_ROOT / "README.md"
 METADATA_PATHS = {"MANIFEST.json", "README.md"}
+REPOSITORY_METADATA_NAMES = {".gitmodules"}
 
 COMPONENTS: tuple[dict[str, Any], ...] = (
     {
@@ -141,6 +142,28 @@ def tree_digest(
     return digest.hexdigest(), entries
 
 
+def strip_repository_metadata(root: Path) -> list[dict[str, Any]]:
+    """Remove projected repository-control files and return a closed receipt."""
+    records: list[dict[str, Any]] = []
+    candidates = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
+    for path in candidates:
+        if path.name not in REPOSITORY_METADATA_NAMES:
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f"projected repository metadata is not a regular file: {path}")
+        relative = path.relative_to(root).as_posix()
+        records.append(
+            {
+                "path": relative,
+                "kind": "file",
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+        path.unlink()
+    return records
+
+
 def ensure_pristine_source(repo: Path) -> None:
     if not (repo / ".git").exists():
         raise RuntimeError(f"source checkout is not initialized: {repo.relative_to(ROOT)}")
@@ -218,6 +241,7 @@ def enforce_replacements() -> None:
 def write_projection_metadata(
     components: list[dict[str, Any]],
     vendor_root: Path,
+    excluded_repository_metadata: list[dict[str, Any]],
 ) -> dict[str, Any]:
     payload_sha256, entries = tree_digest(vendor_root)
     modules_path = vendor_root / "modules.txt"
@@ -230,6 +254,7 @@ def write_projection_metadata(
         "tree_sha256": payload_sha256,
         "entries": len(entries),
         "modules_txt_sha256": sha256_file(modules_path),
+        "excluded_repository_metadata": excluded_repository_metadata,
     }
     lock = {
         "schema_version": "sing-box-vendor-lock/v2",
@@ -276,8 +301,9 @@ python3 tools/vendor/verify.py --require-source
 
 `vendor/modules.txt` is authoritative for Go's vendor-mode package mapping.
 `deps/vendor-lock.json` records source commits, patch digests, patched Git tree
-identities, and the generated projection digest. No Git metadata, gitlink,
-submodule, or nested repository is permitted below `vendor/`.
+identities, the generated projection digest, and any repository-control files
+that Go's projection copied and the materializer removed. No Git metadata,
+gitlink, submodule, or nested repository is permitted below `vendor/`.
 """,
         encoding="utf-8",
     )
@@ -293,10 +319,11 @@ def main_materialize(*, keep_work: bool) -> None:
     generated = ROOT / ".vendor-generated"
     remove_path(generated)
     run("go", "mod", "vendor", "-o", generated, cwd=ROOT, go_mod_mode=True)
+    excluded_repository_metadata = strip_repository_metadata(generated)
 
     remove_path(VENDOR_ROOT)
     generated.rename(VENDOR_ROOT)
-    write_projection_metadata(components, VENDOR_ROOT)
+    write_projection_metadata(components, VENDOR_ROOT, excluded_repository_metadata)
 
     if not keep_work:
         remove_path(WORK_ROOT)
