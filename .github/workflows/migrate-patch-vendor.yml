@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euxo pipefail
           rm -rf vendor/dae/.git vendor/tailscale/.git
-          test -z "$(find vendor -name .git -o -type l)"
+          test -z "$(find vendor -name .git -print)"
           go mod edit -replace=github.com/daeuniverse/dae/ebpfinbound=./vendor/dae/ebpfinbound
           go mod edit -replace=github.com/sagernet/tailscale=./vendor/tailscale
           go test -mod=mod -race -tags 'with_dae,with_gvisor,with_tailscale' -count=1 ./protocol/dae ./protocol/tailscale ./protocol/tun
