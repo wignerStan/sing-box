@@ -1,0 +1,27 @@
+name: Diagnose vendor archive drift
+on:
+  push:
+    branches: [ci/diagnose-vendor-archive]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Compare tracked and archived vendor paths
+        run: |
+          set -euxo pipefail
+          find vendor -name .gitattributes -print -exec sh -c 'echo --- $1; sed -n "1,160p" "$1"' _ {} \;
+          git ls-tree -r --name-only HEAD vendor | sed 's#^vendor/##' | sort > "$RUNNER_TEMP/tracked"
+          mkdir "$RUNNER_TEMP/archive"
+          git archive HEAD vendor | tar -x -C "$RUNNER_TEMP/archive"
+          find "$RUNNER_TEMP/archive/vendor" \( -type f -o -type l \) -print | sed "s#^$RUNNER_TEMP/archive/vendor/##" | sort > "$RUNNER_TEMP/archived"
+          echo '--- omitted from archive ---'
+          comm -23 "$RUNNER_TEMP/tracked" "$RUNNER_TEMP/archived" | head -500
+          echo '--- only in archive ---'
+          comm -13 "$RUNNER_TEMP/tracked" "$RUNNER_TEMP/archived" | head -100
+          test -s <(comm -23 "$RUNNER_TEMP/tracked" "$RUNNER_TEMP/archived")
