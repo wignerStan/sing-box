@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize patched DAE and Tailscale source into parent-owned vendor trees."""
+"""Generate the standard Go vendor projection from pristine sources and patches."""
 
 from __future__ import annotations
 
@@ -12,35 +12,44 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[2]
+WORK_ROOT = ROOT / ".vendor-work"
+VENDOR_ROOT = ROOT / "vendor"
+LOCK_PATH = ROOT / "deps/vendor-lock.json"
+MANIFEST_PATH = VENDOR_ROOT / "MANIFEST.json"
+README_PATH = VENDOR_ROOT / "README.md"
+METADATA_PATHS = {"MANIFEST.json", "README.md"}
 
 COMPONENTS: tuple[dict[str, Any], ...] = (
     {
         "name": "dae-ebpfinbound",
+        "module": "github.com/daeuniverse/dae/ebpfinbound",
         "source": ROOT / "third_party/dae",
         "series": ROOT / "patches/dae/series",
-        "vendor": ROOT / "vendor/dae/ebpfinbound",
-        "copy_subpath": "ebpfinbound",
-        "module": "github.com/daeuniverse/dae/ebpfinbound",
+        "work": WORK_ROOT / "dae",
+        "module_subpath": "ebpfinbound",
     },
     {
         "name": "tailscale",
+        "module": "github.com/sagernet/tailscale",
         "source": ROOT / "third_party/tailscale",
         "series": ROOT / "patches/tailscale/series",
-        "vendor": ROOT / "vendor/tailscale",
-        "copy_subpath": ".",
-        "module": "github.com/sagernet/tailscale",
+        "work": WORK_ROOT / "tailscale",
+        "module_subpath": ".",
     },
 )
 
-LOCK_PATH = ROOT / "deps/vendor-lock.json"
-MANIFEST_PATH = ROOT / "vendor/MANIFEST.json"
-README_PATH = ROOT / "vendor/README.md"
 
-
-def run(*args: str | os.PathLike[str], cwd: Path | None = None) -> str:
+def run(
+    *args: str | os.PathLike[str],
+    cwd: Path | None = None,
+    go_mod_mode: bool = False,
+) -> str:
+    environment = {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
+    if go_mod_mode:
+        environment["GOFLAGS"] = "-mod=mod"
     result = subprocess.run(
         [str(arg) for arg in args],
         cwd=cwd,
@@ -48,11 +57,11 @@ def run(*args: str | os.PathLike[str], cwd: Path | None = None) -> str:
         capture_output=True,
         text=True,
         check=False,
-        timeout=180,
-        env={**os.environ, "LC_ALL": "C", "TZ": "UTC", "GOFLAGS": "-mod=mod"},
+        timeout=300,
+        env=environment,
     )
     if result.returncode:
-        detail = (result.stderr.strip() or result.stdout.strip())[:4000]
+        detail = (result.stderr.strip() or result.stdout.strip())[:6000]
         raise RuntimeError(f"{' '.join(map(str, args))} failed: {detail}")
     return result.stdout
 
@@ -64,7 +73,7 @@ def exact_head(repo: Path) -> str:
 def read_series(path: Path) -> list[Path]:
     if not path.is_file():
         raise RuntimeError(f"missing patch series: {path.relative_to(ROOT)}")
-    entries: list[Path] = []
+    patches: list[Path] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         name = raw.strip()
         if not name or name.startswith("#"):
@@ -72,10 +81,10 @@ def read_series(path: Path) -> list[Path]:
         patch = path.parent / name
         if not patch.is_file():
             raise RuntimeError(f"missing patch: {patch.relative_to(ROOT)}")
-        entries.append(patch)
-    if not entries:
+        patches.append(patch)
+    if not patches:
         raise RuntimeError(f"empty patch series: {path.relative_to(ROOT)}")
-    return entries
+    return patches
 
 
 def sha256_file(path: Path) -> str:
@@ -86,30 +95,28 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def copy_source(source: Path, destination: Path) -> None:
-    def ignored(directory: str, names: list[str]) -> set[str]:
-        del directory
-        blocked = {".git", ".gitmodules"}
-        return {name for name in names if name in blocked}
-
-    shutil.copytree(source, destination, symlinks=True, ignore=ignored)
-
-
-def tree_digest(root: Path) -> tuple[str, list[dict[str, Any]]]:
+def tree_digest(
+    root: Path,
+    *,
+    excluded: Iterable[str] = (),
+) -> tuple[str, list[dict[str, Any]]]:
+    excluded_set = set(excluded)
     digest = hashlib.sha256()
     entries: list[dict[str, Any]] = []
     for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
         relative = path.relative_to(root).as_posix()
+        if relative in excluded_set:
+            continue
         info = path.lstat()
         mode = stat.S_IMODE(info.st_mode)
         if path.is_symlink():
-            # POSIX exposes platform-specific permission bits for symlinks.
-            # Git records symlinks by target, not by those filesystem bits.
+            # Git records symlinks by target; filesystem permission bits vary.
             mode = 0o777
             kind = "symlink"
             target = os.readlink(path)
-            content_sha256 = hashlib.sha256(target.encode("utf-8")).hexdigest()
-            size = len(target.encode("utf-8"))
+            encoded_target = target.encode("utf-8")
+            content_sha256 = hashlib.sha256(encoded_target).hexdigest()
+            size = len(encoded_target)
         elif path.is_dir():
             kind = "directory"
             content_sha256 = None
@@ -141,13 +148,24 @@ def ensure_pristine_source(repo: Path) -> None:
         raise RuntimeError(f"source checkout is dirty: {repo.relative_to(ROOT)}")
 
 
-def materialize_component(component: dict[str, Any], temporary_root: Path) -> dict[str, Any]:
+def remove_path(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def materialize_component(component: dict[str, Any]) -> dict[str, Any]:
     source: Path = component["source"]
+    work: Path = component["work"]
     ensure_pristine_source(source)
     base_commit = exact_head(source)
     patches = read_series(component["series"])
 
-    work = temporary_root / component["name"]
+    remove_path(work)
+    work.parent.mkdir(parents=True, exist_ok=True)
     run("git", "clone", "--quiet", "--no-hardlinks", str(source), str(work))
     run("git", "checkout", "--quiet", "--detach", base_commit, cwd=work)
 
@@ -163,23 +181,9 @@ def materialize_component(component: dict[str, Any], temporary_root: Path) -> di
         )
 
     result_tree = run("git", "write-tree", cwd=work).strip()
-    source_path = work / component["copy_subpath"]
-    if not source_path.exists():
-        raise RuntimeError(f"materialized subpath is absent: {component['copy_subpath']}")
-
-    vendor: Path = component["vendor"]
-    if vendor.exists() or vendor.is_symlink():
-        if vendor.is_dir() and not vendor.is_symlink():
-            shutil.rmtree(vendor)
-        else:
-            vendor.unlink()
-    vendor.parent.mkdir(parents=True, exist_ok=True)
-    copy_source(source_path, vendor)
-    if any(vendor.rglob(".git")):
-        raise RuntimeError(f"nested Git metadata in {vendor.relative_to(ROOT)}")
-    if any(vendor.rglob(".gitmodules")):
-        raise RuntimeError(f"nested .gitmodules in {vendor.relative_to(ROOT)}")
-    vendor_sha256, entries = tree_digest(vendor)
+    module_root = (work / component["module_subpath"]).resolve()
+    if not (module_root / "go.mod").is_file():
+        raise RuntimeError(f"materialized module is absent: {module_root}")
 
     return {
         "name": component["name"],
@@ -190,88 +194,162 @@ def materialize_component(component: dict[str, Any], temporary_root: Path) -> di
         },
         "patches": patch_records,
         "result_tree": result_tree,
-        "materialization": {
-            "path": vendor.relative_to(ROOT).as_posix(),
-            "source_subpath": component["copy_subpath"],
-            "tree_sha256": vendor_sha256,
-            "entries": len(entries),
+        "generation_input": {
+            "path": module_root.relative_to(ROOT).as_posix(),
+            "tracked": False,
         },
     }
 
 
-def write_metadata(components: list[dict[str, Any]]) -> None:
+def enforce_replacements() -> None:
+    for component in COMPONENTS:
+        module_root = component["work"] / component["module_subpath"]
+        replacement = "./" + module_root.relative_to(ROOT).as_posix()
+        run(
+            "go",
+            "mod",
+            "edit",
+            f"-replace={component['module']}={replacement}",
+            cwd=ROOT,
+            go_mod_mode=True,
+        )
+
+
+def write_projection_metadata(
+    components: list[dict[str, Any]],
+    vendor_root: Path,
+) -> dict[str, Any]:
+    payload_sha256, entries = tree_digest(vendor_root)
+    modules_path = vendor_root / "modules.txt"
+    if not modules_path.is_file():
+        raise RuntimeError("go mod vendor did not create vendor/modules.txt")
+
+    projection = {
+        "path": vendor_root.relative_to(ROOT).as_posix(),
+        "format": "go-mod-vendor",
+        "tree_sha256": payload_sha256,
+        "entries": len(entries),
+        "modules_txt_sha256": sha256_file(modules_path),
+    }
     lock = {
-        "schema_version": "sing-box-vendor-lock/v1",
+        "schema_version": "sing-box-vendor-lock/v2",
         "authority": "wignerStan/sing-box",
         "components": components,
+        "projection": projection,
     }
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     LOCK_PATH.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     manifest = {
-        "schema_version": "sing-box-vendor-manifest/v1",
+        "schema_version": "sing-box-vendor-manifest/v2",
         "generated_by": "tools/vendor/materialize.py",
         "lock": LOCK_PATH.relative_to(ROOT).as_posix(),
+        "projection": projection,
         "components": [
             {
                 "name": component["name"],
                 "module": component["module"],
-                "path": component["materialization"]["path"],
-                "tree_sha256": component["materialization"]["tree_sha256"],
+                "source_commit": component["source"]["commit"],
+                "result_tree": component["result_tree"],
             }
             for component in components
         ],
     }
-    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST_PATH.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     README_PATH.write_text(
-        """# Generated vendor materializations
+        """# Generated Go vendor projection
 
-`vendor/` contains parent-owned ordinary files generated from exact
-`third_party/` source pins plus the ordered patch stacks in `patches/`.
+`vendor/` is a standard Go vendor projection generated from the main module
+graph. DAE and Tailscale packages come from pristine `third_party/` pins after
+the ordered parent-owned patch stacks under `patches/` are applied in the
+ignored `.vendor-work/` generation area.
 
-Do not edit these files directly. Run:
+Do not edit files below `vendor/` directly. Regenerate and verify with:
 
 ```sh
 python3 tools/vendor/materialize.py
-python3 tools/vendor/verify.py
+python3 tools/vendor/verify.py --require-source
 ```
 
-The source relationship, patch digests, patched Git tree, and materialized tree
-digest are recorded in `deps/vendor-lock.json`. No Git metadata, gitlink,
+`vendor/modules.txt` is authoritative for Go's vendor-mode package mapping.
+`deps/vendor-lock.json` records source commits, patch digests, patched Git tree
+identities, and the generated projection digest. No Git metadata, gitlink,
 submodule, or nested repository is permitted below `vendor/`.
 """,
         encoding="utf-8",
     )
+    return projection
 
 
-def main_materialize() -> None:
-    vendor_root = ROOT / "vendor"
-    if vendor_root.exists():
-        for nested in vendor_root.rglob(".git"):
-            raise RuntimeError(f"nested Git metadata found before generation: {nested}")
-    with tempfile.TemporaryDirectory(prefix="sing-box-vendor-") as temporary:
-        components = [
-            materialize_component(component, Path(temporary)) for component in COMPONENTS
-        ]
-    write_metadata(components)
-    run(
-        "go",
-        "mod",
-        "edit",
-        "-replace=github.com/daeuniverse/dae/ebpfinbound=./vendor/dae/ebpfinbound",
-        cwd=ROOT,
-    )
-    run(
-        "go",
-        "mod",
-        "edit",
-        "-replace=github.com/sagernet/tailscale=./vendor/tailscale",
-        cwd=ROOT,
-    )
-    run("go", "mod", "tidy", cwd=ROOT)
+def main_materialize(*, keep_work: bool) -> None:
+    remove_path(WORK_ROOT)
+    components = [materialize_component(component) for component in COMPONENTS]
+    enforce_replacements()
+    run("go", "mod", "tidy", cwd=ROOT, go_mod_mode=True)
+
+    generated = ROOT / ".vendor-generated"
+    remove_path(generated)
+    run("go", "mod", "vendor", "-o", generated, cwd=ROOT, go_mod_mode=True)
+
+    remove_path(VENDOR_ROOT)
+    generated.rename(VENDOR_ROOT)
+    write_projection_metadata(components, VENDOR_ROOT)
+
+    if not keep_work:
+        remove_path(WORK_ROOT)
+
+
+def snapshot_path(source: Path, destination: Path) -> None:
+    if source.is_dir() and not source.is_symlink():
+        shutil.copytree(source, destination, symlinks=True)
+    elif source.exists() or source.is_symlink():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination, follow_symlinks=False)
+
+
+def restore_path(snapshot: Path, destination: Path) -> None:
+    remove_path(destination)
+    if snapshot.is_dir() and not snapshot.is_symlink():
+        shutil.copytree(snapshot, destination, symlinks=True)
+    elif snapshot.exists() or snapshot.is_symlink():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(snapshot, destination, follow_symlinks=False)
+
+
+def check_generated_output() -> None:
+    tracked = [VENDOR_ROOT, LOCK_PATH, ROOT / "go.mod", ROOT / "go.sum"]
+    with tempfile.TemporaryDirectory(prefix="sing-box-vendor-check-") as temporary:
+        snapshot_root = Path(temporary) / "snapshot"
+        for path in tracked:
+            snapshot_path(path, snapshot_root / path.relative_to(ROOT))
+
+        failure: str | None = None
+        try:
+            main_materialize(keep_work=False)
+            for path in tracked:
+                expected = snapshot_root / path.relative_to(ROOT)
+                if path.is_dir():
+                    if not expected.is_dir():
+                        failure = f"missing checked-in output: {path.relative_to(ROOT)}"
+                        break
+                    current_digest, _ = tree_digest(path)
+                    expected_digest, _ = tree_digest(expected)
+                    if current_digest != expected_digest:
+                        failure = f"generated tree drift: {path.relative_to(ROOT)}"
+                        break
+                elif not expected.is_file() or path.read_bytes() != expected.read_bytes():
+                    failure = f"generated metadata drift: {path.relative_to(ROOT)}"
+                    break
+        finally:
+            for path in tracked:
+                restore_path(snapshot_root / path.relative_to(ROOT), path)
+            remove_path(WORK_ROOT)
+            remove_path(ROOT / ".vendor-generated")
+        if failure:
+            raise SystemExit(failure)
 
 
 def main() -> None:
@@ -281,37 +359,19 @@ def main() -> None:
         action="store_true",
         help="regenerate and fail if checked-in output changes",
     )
+    parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="retain ignored patched source inputs for dependency-level tests",
+    )
     options = parser.parse_args()
 
     if options.check:
-        tracked = [LOCK_PATH, MANIFEST_PATH, README_PATH, ROOT / "go.mod", ROOT / "go.sum"]
-        for component in COMPONENTS:
-            tracked.append(component["vendor"])
-        with tempfile.TemporaryDirectory(prefix="sing-box-vendor-check-") as temporary:
-            snapshot = Path(temporary) / "snapshot"
-            for path in tracked:
-                if path.is_dir():
-                    shutil.copytree(path, snapshot / path.relative_to(ROOT), symlinks=True)
-                elif path.exists():
-                    target = snapshot / path.relative_to(ROOT)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(path, target)
-            main_materialize()
-            for path in tracked:
-                expected = snapshot / path.relative_to(ROOT)
-                if path.is_dir():
-                    current_digest, _ = tree_digest(path)
-                    if not expected.is_dir():
-                        raise SystemExit(f"missing checked-in output: {path.relative_to(ROOT)}")
-                    expected_digest, _ = tree_digest(expected)
-                    if current_digest != expected_digest:
-                        raise SystemExit(f"vendor drift: {path.relative_to(ROOT)}")
-                else:
-                    if not expected.is_file() or path.read_bytes() != expected.read_bytes():
-                        raise SystemExit(f"generated metadata drift: {path.relative_to(ROOT)}")
+        if options.keep_work:
+            parser.error("--check and --keep-work are mutually exclusive")
+        check_generated_output()
         return
-
-    main_materialize()
+    main_materialize(keep_work=options.keep_work)
 
 
 if __name__ == "__main__":
