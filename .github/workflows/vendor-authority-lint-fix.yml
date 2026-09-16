@@ -1,0 +1,82 @@
+name: Generate vendor-authority lint repair
+on:
+  push:
+    branches: [ci/fix-vendor-authority-lint]
+    paths: [.github/workflows/vendor-authority-lint-fix.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ci/fix-vendor-authority-lint
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Remove dead compatibility helpers and fix error text
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('protocol/tailscale/system_exit_route_socket_darwin.go')
+          text = path.read_text(encoding='utf-8')
+          old = '''// Keep the small operation helpers for package-local callers and older tests;\n// the manager uses apply so test doubles can observe the complete lifecycle.\nfunc addScopedDefault(r systemRoute) error {\n\treturn executeScopedRoute(unix.RTM_ADD, r)\n}\n\nfunc deleteScopedDefault(r systemRoute) error {\n\treturn executeScopedRoute(unix.RTM_DELETE, r)\n}\n\n'''
+          if text.count(old) != 1:
+              raise SystemExit('route helper removal anchor changed')
+          path.write_text(text.replace(old, ''), encoding='utf-8')
+
+          path = Path('protocol/tailscale/system_exit_route.go')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              'errors.New("Tailscale address is not ready for system exit route")': 'errors.New("tailscale address is not ready for system exit route")',
+              'errors.New("Tailscale system interface is not ready")': 'errors.New("tailscale system interface is not ready")',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'error text anchor changed: {old}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('protocol/tailscale/system_exit_route_darwin.go')
+          text = path.read_text(encoding='utf-8')
+          old = 'fmt.Errorf("Tailscale interface %q index lookup: %w", r.name, err)'
+          new = 'fmt.Errorf("tailscale interface %q index lookup: %w", r.name, err)'
+          if text.count(old) != 1:
+              raise SystemExit('darwin error text anchor changed')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Apply formatter and modernization fixes
+        uses: golangci/golangci-lint-action@v8
+        continue-on-error: true
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+        with:
+          version: v2.13.2
+          args: --fix --timeout=30m
+      - name: Verify lint repair
+        uses: golangci/golangci-lint-action@v8
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+        with:
+          version: v2.13.2
+          args: --timeout=30m
+      - name: Test focused packages and publish source-only commit
+        env:
+          TAGS: with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
+        run: |
+          set -euxo pipefail
+          go test -mod=vendor -tags "$TAGS" ./protocol/tailscale ./protocol/tun
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add protocol/tailscale protocol/tun
+          git commit -s -m 'style(tailscale): satisfy current Go lint contract'
+          git push origin HEAD:ci/fix-vendor-authority-lint
