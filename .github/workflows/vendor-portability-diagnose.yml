@@ -5,59 +5,107 @@ on:
 permissions:
   contents: read
 jobs:
-  diagnose:
-    runs-on: macos-15
-    timeout-minutes: 20
+  records:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-24.04
+          - name: macos
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          submodules: recursive
           persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.x'
-          cache: false
-      - name: Compare checked-in and regenerated trees
+      - name: Record checked-in vendor tree
+        env:
+          PLATFORM_NAME: ${{ matrix.name }}
         shell: bash
         run: |
-          set -euxo pipefail
-          cp -a vendor "$RUNNER_TEMP/vendor-checked"
-          python3 tools/vendor/materialize.py
-          python3 - "$RUNNER_TEMP/vendor-checked/tailscale" vendor/tailscale <<'PY'
+          python3 - "$RUNNER_TEMP/records-${PLATFORM_NAME}.json" <<'PY'
           import hashlib, json, os, stat, sys
           from pathlib import Path
 
           def sha(path):
-              h = hashlib.sha256()
-              with path.open('rb') as f:
-                  for chunk in iter(lambda: f.read(1024 * 1024), b''):
-                      h.update(chunk)
-              return h.hexdigest()
+              digest = hashlib.sha256()
+              with path.open('rb') as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                      digest.update(chunk)
+              return digest.hexdigest()
 
           def records(root):
               root = Path(root)
-              out = {}
-              for path in sorted(root.rglob('*'), key=lambda p: p.relative_to(root).as_posix()):
-                  rel = path.relative_to(root).as_posix()
+              result = {}
+              for path in sorted(root.rglob('*'), key=lambda item: item.relative_to(root).as_posix()):
+                  relative = path.relative_to(root).as_posix()
                   info = path.lstat()
                   mode = f"{stat.S_IMODE(info.st_mode):04o}"
                   if path.is_symlink():
                       target = os.readlink(path)
-                      out[rel] = ('symlink', mode, len(target.encode()), hashlib.sha256(target.encode()).hexdigest())
+                      result[relative] = {
+                          'kind': 'symlink', 'mode': mode,
+                          'size': len(target.encode('utf-8')),
+                          'sha256': hashlib.sha256(target.encode('utf-8')).hexdigest(),
+                      }
                   elif path.is_dir():
-                      out[rel] = ('directory', mode, 0, None)
+                      result[relative] = {'kind': 'directory', 'mode': mode, 'size': 0, 'sha256': None}
                   elif path.is_file():
-                      out[rel] = ('file', mode, info.st_size, sha(path))
+                      result[relative] = {'kind': 'file', 'mode': mode, 'size': info.st_size, 'sha256': sha(path)}
                   else:
-                      out[rel] = ('unsupported', mode, info.st_size, None)
-              return out
+                      raise SystemExit(f'unsupported path: {path}')
+              return result
 
-          before, after = records(sys.argv[1]), records(sys.argv[2])
-          keys = sorted(set(before) | set(after))
-          differences = [(key, before.get(key), after.get(key)) for key in keys if before.get(key) != after.get(key)]
-          print(json.dumps({'before_entries': len(before), 'after_entries': len(after), 'difference_count': len(differences)}, sort_keys=True))
-          for key, old, new in differences[:300]:
-              print(json.dumps({'path': key, 'checked': old, 'regenerated': new}, sort_keys=True))
-          if not differences:
-              raise SystemExit('no record-level difference found')
+          payload = {
+              'dae': records('vendor/dae/ebpfinbound'),
+              'tailscale': records('vendor/tailscale'),
+          }
+          Path(sys.argv[1]).write_text(json.dumps(payload, sort_keys=True), encoding='utf-8')
+          print(json.dumps({name: len(entries) for name, entries in payload.items()}, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vendor-records-${{ matrix.name }}
+          path: ${{ runner.temp }}/records-${{ matrix.name }}.json
+          if-no-files-found: error
+          retention-days: 1
+
+  compare:
+    needs: records
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vendor-records-*
+          path: records
+          merge-multiple: true
+      - name: Compare Linux and macOS records
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          linux = json.loads(Path('records/records-linux.json').read_text())
+          macos = json.loads(Path('records/records-macos.json').read_text())
+          total = 0
+          for component in sorted(set(linux) | set(macos)):
+              left = linux.get(component, {})
+              right = macos.get(component, {})
+              differences = []
+              for path in sorted(set(left) | set(right)):
+                  if left.get(path) != right.get(path):
+                      differences.append({'path': path, 'linux': left.get(path), 'macos': right.get(path)})
+              total += len(differences)
+              print(json.dumps({
+                  'component': component,
+                  'linux_entries': len(left),
+                  'macos_entries': len(right),
+                  'difference_count': len(differences),
+              }, sort_keys=True))
+              for difference in differences[:400]:
+                  print(json.dumps(difference, sort_keys=True))
+          if total == 0:
+              raise SystemExit('vendor records are identical; investigate lock-generation context')
           PY
