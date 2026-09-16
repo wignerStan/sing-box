@@ -2,11 +2,9 @@
   "authority": "wignerStan/sing-box",
   "components": [
     {
-      "materialization": {
-        "entries": 40,
-        "path": "vendor/dae/ebpfinbound",
-        "source_subpath": "ebpfinbound",
-        "tree_sha256": "c3331ff43cc52826f2b573a0718f4f4768c6608caf608922d6d40ccd84a705c9"
+      "generation_input": {
+        "path": ".vendor-work/dae/ebpfinbound",
+        "tracked": false
       },
       "module": "github.com/daeuniverse/dae/ebpfinbound",
       "name": "dae-ebpfinbound",
@@ -29,11 +27,9 @@
       }
     },
     {
-      "materialization": {
-        "entries": 1918,
-        "path": "vendor/tailscale",
-        "source_subpath": ".",
-        "tree_sha256": "3f68352fce0ea57c8bdcb371c327b8f4a347ebff1a25e3f8c5afcda1dc3898cd"
+      "generation_input": {
+        "path": ".vendor-work/tailscale",
+        "tracked": false
       },
       "module": "github.com/sagernet/tailscale",
       "name": "tailscale",
@@ -56,5 +52,38 @@
       }
     }
   ],
-  "schema_version": "sing-box-vendor-lock/v1"
+  "projection": {
+    "entries": 9069,
+    "excluded_repository_metadata": [
+      {
+        "kind": "file",
+        "path": "github.com/oschwald/maxminddb-golang/.gitmodules",
+        "sha256": "712439aa14a3dabc22c81f63f2206c3575d108bbedfe027e1489d4cae270520e",
+        "size": 91
+      },
+      {
+        "kind": "file",
+        "path": "github.com/quic-go/qpack/.gitmodules",
+        "sha256": "275c61ce7591bcea2c35e6d0d9ecfa92402ac6256b5fcfa165df5ca2ffe4e546",
+        "size": 92
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/cronet-go/.gitmodules",
+        "sha256": "66cbd75e4526d7209b25aea89d836e776fe9afcde486d5d036ad0eadf6f60f6a",
+        "size": 114
+      },
+      {
+        "kind": "file",
+        "path": "go4.org/netipx/.gitmodules",
+        "sha256": "adb7f08384a03d57866aba4a8e28ce2f68ca8576d6cac118166980dd31ae0173",
+        "size": 88
+      }
+    ],
+    "format": "go-mod-vendor",
+    "modules_txt_sha256": "10801d64d7248b9d50af7a9501619adb5ab887087d21445fe06b0ef40262898c",
+    "path": "vendor",
+    "tree_sha256": "1856dc6bd8507a31b87f954c81a9283f45fff92822941545c8e649bb54693839"
+  },
+  "schema_version": "sing-box-vendor-lock/v2"
 }
