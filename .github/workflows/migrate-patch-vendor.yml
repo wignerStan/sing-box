@@ -49,13 +49,10 @@ jobs:
         working-directory: repo
         run: |
           set -euxo pipefail
-          mkdir -p tools/vendor .github/workflows docs
+          mkdir -p tools/vendor docs
           cp ../control/tools/vendor/*.py tools/vendor/
-          cp ../control/.github/workflows/vendor-integrity.yml .github/workflows/vendor-integrity.yml
-          cp ../control/.github/workflows/vendor-release.yml .github/workflows/vendor-release.yml
           cp ../control/docs/VENDOR_AUTHORITY.md docs/VENDOR_AUTHORITY.md
           chmod +x tools/vendor/*.py
-          rm -f .github/workflows/dae.yml .github/workflows/tailscale-cgnat.yml
           sed -i '\|^/vendor/$|d' .gitignore
           grep -qxF '/.vendor-work/' .gitignore || printf '\n/.vendor-work/\n' >> .gitignore
       - name: Pin pristine public sources
@@ -174,7 +171,7 @@ jobs:
         working-directory: repo
         run: |
           set -euxo pipefail
-          git add .gitmodules third_party patches vendor deps tools/vendor docs/VENDOR_AUTHORITY.md go.mod go.sum .gitignore .github/workflows
+          git add .gitmodules third_party patches vendor deps tools/vendor docs/VENDOR_AUTHORITY.md go.mod go.sum .gitignore
           git diff --cached --check -- . ':(exclude)patches/**' ':(exclude)vendor/**'
           git commit -s -m 'build: make sing-box authoritative for patched DAE and Tailscale'
           git push origin HEAD:refs/heads/integration/vendor-authority
