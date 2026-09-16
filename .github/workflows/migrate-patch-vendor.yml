@@ -1,35 +1,44 @@
-name: Integrate native Tailscale line
+name: Prove generated vendor checkout model
 on:
   push:
     branches: [integration/patch-vendor-authority]
     paths: [.github/workflows/migrate-patch-vendor.yml]
 permissions:
-  contents: write
+  contents: read
 jobs:
-  integrate:
+  prove:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           ref: integration/patch-vendor-authority
-          fetch-depth: 0
-      - name: Merge reviewed native Tailscale line
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          repository: wignerStan/dae
+          ref: 03db16e3d76132e926c15d66aa68c7075fbc115f
+          path: source/vendor/dae
+          persist-credentials: false
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          repository: wignerStan/tailscale
+          ref: 77241e18758f55ee2e74cde8c868baa6596bbada
+          path: source/vendor/tailscale
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Test parent-owned materialized checkouts
+        working-directory: source
         run: |
           set -euxo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git fetch origin fix/tailscale-cgnat-direct-udp
-          if ! git merge --no-ff --no-commit origin/fix/tailscale-cgnat-direct-udp; then
-            test "$(git diff --name-only --diff-filter=U | sort | tr '\n' ' ')" = 'go.mod go.sum '
-            git show :3:go.sum > "$RUNNER_TEMP/theirs.go.sum"
-            git checkout --ours go.mod go.sum
-            grep -q '^replace github.com/sagernet/tailscale ' go.mod || printf '\nreplace github.com/sagernet/tailscale => github.com/wignerStan/tailscale v0.0.0-20260916025124-ddc87a687baf\n' >> go.mod
-            cat "$RUNNER_TEMP/theirs.go.sum" >> go.sum
-            LC_ALL=C sort -u go.sum -o go.sum
-            git add go.mod go.sum
-          fi
-          test -z "$(git diff --name-only --diff-filter=U)"
-          git diff --check --cached
-          git commit --no-edit
-          git push origin HEAD:refs/heads/integration/patch-vendor-authority
+          rm -rf vendor/dae/.git vendor/tailscale/.git
+          test -z "$(find vendor -name .git -o -type l)"
+          go mod edit -replace=github.com/daeuniverse/dae/ebpfinbound=./vendor/dae/ebpfinbound
+          go mod edit -replace=github.com/sagernet/tailscale=./vendor/tailscale
+          go test -mod=mod -race -tags 'with_dae,with_gvisor,with_tailscale' -count=1 ./protocol/dae ./protocol/tailscale ./protocol/tun
+          go vet -mod=mod -tags 'with_dae,with_gvisor,with_tailscale' ./protocol/dae ./protocol/tailscale ./protocol/tun
+          CGO_ENABLED=0 go build -mod=mod -tags 'with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale' ./cmd/sing-box
