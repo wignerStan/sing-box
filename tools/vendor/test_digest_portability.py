@@ -72,11 +72,26 @@ class VendorDigestPortabilityTests(unittest.TestCase):
                 ],
             )
 
+    def test_all_repository_metadata_names_are_stripped(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in materialize.REPOSITORY_METADATA_NAMES:
+                (root / name).write_text(name + "\n", encoding="utf-8")
+
+            receipt = materialize.strip_repository_metadata(root)
+
+            self.assertEqual(
+                {item["path"] for item in receipt},
+                materialize.REPOSITORY_METADATA_NAMES,
+            )
+            for name in materialize.REPOSITORY_METADATA_NAMES:
+                self.assertFalse((root / name).exists())
+
     def test_repository_metadata_receipt_rejects_other_files(self) -> None:
         projection = {
             "excluded_repository_metadata": [
                 {
-                    "path": "example/.gitignore",
+                    "path": "example/.gitkeep",
                     "kind": "file",
                     "size": 0,
                     "sha256": "0" * 64,
