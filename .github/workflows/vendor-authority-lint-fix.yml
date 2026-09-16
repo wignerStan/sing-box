@@ -45,11 +45,15 @@ jobs:
 
           path = Path('protocol/tailscale/system_exit_route_darwin.go')
           text = path.read_text(encoding='utf-8')
-          old = 'fmt.Errorf("Tailscale interface %q index lookup: %w", r.name, err)'
-          new = 'fmt.Errorf("tailscale interface %q index lookup: %w", r.name, err)'
-          if text.count(old) != 1:
-              raise SystemExit('darwin error text anchor changed')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          replacements = {
+              'fmt.Errorf("Tailscale interface %q index lookup: %w", r.name, err)': 'fmt.Errorf("tailscale interface %q index lookup: %w", r.name, err)',
+              'fmt.Errorf("Tailscale %s route %s: %w", systemRouteFamilyName(family), operation, err)': 'fmt.Errorf("tailscale %s route %s: %w", systemRouteFamilyName(family), operation, err)',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'darwin error text anchor changed: {old}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
           PY
       - name: Apply formatter and modernization fixes
         uses: golangci/golangci-lint-action@v8
