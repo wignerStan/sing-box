@@ -1,0 +1,52 @@
+name: Diagnose Go vendor projection
+on:
+  push:
+    branches: [ci/diagnose-go-vendor-projection]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Convert full materializations to standard Go vendor projection
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 tools/vendor/materialize.py
+          rm -rf .vendor-work vendor-go
+          mkdir -p .vendor-work/dae
+          mv vendor/dae/ebpfinbound .vendor-work/dae/ebpfinbound
+          mv vendor/tailscale .vendor-work/tailscale
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('go.mod')
+          text = path.read_text()
+          text = text.replace('./vendor/dae/ebpfinbound', './.vendor-work/dae/ebpfinbound')
+          text = text.replace('./vendor/tailscale', './.vendor-work/tailscale')
+          path.write_text(text)
+          PY
+          rm -rf vendor
+          GOFLAGS=-mod=mod go mod tidy
+          GOFLAGS=-mod=mod go mod vendor -o vendor
+          test -f vendor/modules.txt
+          grep -n -A3 -B1 'github.com/daeuniverse/dae/ebpfinbound\|github.com/sagernet/tailscale' vendor/modules.txt
+          test -d vendor/github.com/daeuniverse/dae/ebpfinbound
+          test -d vendor/github.com/sagernet/tailscale
+      - name: Prove archive builds after disposable source removal
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf .vendor-work
+          go list ./protocol/dae ./protocol/tailscale ./protocol/tun
+          go test -run '^$' -tags 'with_dae,with_gvisor,with_tailscale' ./protocol/dae ./protocol/tailscale ./protocol/tun
+          CGO_ENABLED=0 go build -trimpath -tags 'with_dae,with_gvisor,with_tailscale' ./cmd/sing-box
+          git diff --check
