@@ -1,0 +1,78 @@
+name: Publish native CGNAT integration
+on:
+  push:
+    branches: [automation/cgnat-direct-udp]
+    paths: [.github/workflows/cgnat-implement.yml, automation/cgnat_fix.py]
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: 72e1829e5e431d344d2af8fd50895bca9f1f172a
+          path: source
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Preserve deployed TCP fix and apply native ownership changes
+        run: |
+          set -euxo pipefail
+          git -C source config user.name 'github-actions[bot]'
+          git -C source config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C source cherry-pick -x 8a4bc50e51017f360c280db0cdac8d3010a108c3
+          python3 control/automation/cgnat_fix.py source
+          gofmt -w source/protocol/tailscale/process_hooks.go source/protocol/tailscale/endpoint.go source/protocol/tailscale/cgnat_underlay_test.go
+          git -C source diff --check
+      - name: Pin the actual published dependency commit
+        working-directory: source
+        run: |
+          set -euxo pipefail
+          sha=$(git ls-remote https://github.com/wignerStan/tailscale.git refs/heads/fix/cgnat-direct-udp-native | cut -f1)
+          test -n "$sha"
+          test "$sha" != 76dc752abe20efe2bc43e5521f999d8f7356c95f
+          version=$(go list -m -json "github.com/wignerStan/tailscale@$sha" | jq -r .Version)
+          go mod edit -replace="github.com/sagernet/tailscale=github.com/wignerStan/tailscale@$version"
+          go mod tidy
+          go mod download github.com/sagernet/tailscale
+          git diff --stat -- go.mod go.sum
+          echo "Tailscale dependency: $sha / $version" >> "$GITHUB_STEP_SUMMARY"
+      - name: Race tests, vet, and full release-tagged build
+        working-directory: source
+        run: |
+          set -euxo pipefail
+          tags=with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
+          go test -mod=readonly -race -tags "$tags" -count=1 ./protocol/tailscale ./protocol/tun
+          go vet -mod=readonly -tags "$tags" ./protocol/tailscale ./protocol/tun
+          CGO_ENABLED=0 go build -mod=readonly -tags "$tags" -trimpath -o "$RUNNER_TEMP/sing-box" ./cmd/sing-box
+      - name: Publish source-only commit
+        working-directory: source
+        run: |
+          set -euxo pipefail
+          git add protocol/tailscale/process_hooks.go protocol/tailscale/endpoint.go protocol/tailscale/cgnat_underlay_test.go docs/CGNAT_DIRECT_UDP.md go.mod go.sum
+          git commit -s -m 'fix(tailscale): own system interface identity and enable CGNAT underlay UDP'
+          git push origin HEAD:refs/heads/fix/tailscale-cgnat-direct-udp
+          echo "sing-box: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve reviewed source
+        working-directory: source
+        run: |
+          mkdir -p artifacts
+          git archive HEAD | gzip > artifacts/source.tar.gz
+          git rev-parse HEAD > artifacts/SOURCE_COMMIT
+          cp "$RUNNER_TEMP/sing-box" artifacts/sing-box-linux-amd64
+          (cd artifacts && sha256sum * > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-cgnat-integration
+          path: source/artifacts/
+          retention-days: 30
