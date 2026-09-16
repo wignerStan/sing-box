@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -47,6 +48,43 @@ class VendorDigestPortabilityTests(unittest.TestCase):
             (root / "README.md").write_text("second\n", encoding="utf-8")
             second, _ = materialize.tree_digest(root, excluded={"README.md"})
             self.assertEqual(first, second)
+
+    def test_repository_metadata_is_stripped_with_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata = root / "example" / ".gitmodules"
+            metadata.parent.mkdir()
+            raw = b'[submodule "fixture"]\n\tpath = fixture\n'
+            metadata.write_bytes(raw)
+
+            receipt = materialize.strip_repository_metadata(root)
+
+            self.assertFalse(metadata.exists())
+            self.assertEqual(
+                receipt,
+                [
+                    {
+                        "path": "example/.gitmodules",
+                        "kind": "file",
+                        "size": len(raw),
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                    }
+                ],
+            )
+
+    def test_repository_metadata_receipt_rejects_other_files(self) -> None:
+        projection = {
+            "excluded_repository_metadata": [
+                {
+                    "path": "example/.gitignore",
+                    "kind": "file",
+                    "size": 0,
+                    "sha256": "0" * 64,
+                }
+            ]
+        }
+        with self.assertRaises(RuntimeError):
+            verify.validate_excluded_repository_metadata(projection)
 
 
 if __name__ == "__main__":
