@@ -199,4 +199,4 @@ require (
 	zombiezen.com/go/capnproto2 v2.18.2+incompatible // indirect
 )
 
-replace github.com/sagernet/tailscale => github.com/wignerStan/tailscale v0.0.0-20260908012715-76dc752abe20
+replace github.com/sagernet/tailscale => github.com/wignerStan/tailscale v0.0.0-20260916025124-ddc87a687baf

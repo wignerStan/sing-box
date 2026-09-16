@@ -381,6 +381,22 @@ func (t *Endpoint) start() (retErr error) {
 			_ = systemTun.Close()
 			return err
 		}
+		// Use the actual allocated interface, not merely the requested name.
+		// Register it before tsnet enumerates physical endpoint candidates.
+		tunName, err = wgTunDevice.Name()
+		if err != nil {
+			_ = systemTun.Close()
+			return E.Cause(err, "read Tailscale system-interface name")
+		}
+		systemInterface, err := net.InterfaceByName(tunName)
+		if err != nil {
+			_ = systemTun.Close()
+			return E.Cause(err, "resolve Tailscale system-interface identity")
+		}
+		if err = t.processHooks.setSystemInterface(tunName, systemInterface.Index); err != nil {
+			_ = systemTun.Close()
+			return err
+		}
 		systemDialer, err := dialer.NewDefault(t.ctx, option.DialerOptions{
 			AbstractDialerOptions: option.AbstractDialerOptions{
 				BindInterface: tunName,
