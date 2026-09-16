@@ -1,5 +1,6 @@
 name: Patch and vendor integrity
 on:
+  workflow_dispatch:
   pull_request:
     branches: [testing]
     paths:
