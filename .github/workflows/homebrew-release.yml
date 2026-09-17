@@ -23,15 +23,18 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           persist-credentials: false
-      - name: Check formula style and syntax
+      - name: Stage reviewed formula in an ephemeral tap
         run: |
           set -euxo pipefail
           ruby -c packaging/homebrew/Formula/sing-box-wigner.rb
-          brew style packaging/homebrew/Formula/sing-box-wigner.rb
+          brew tap-new wignerStan/release-ci
+          tap_dir="$(brew --repository wignerStan/release-ci)"
+          cp packaging/homebrew/Formula/sing-box-wigner.rb "$tap_dir/Formula/sing-box-wigner.rb"
+          brew style "$tap_dir/Formula/sing-box-wigner.rb"
       - name: Install from immutable release source
         run: |
           set -euxo pipefail
-          brew install --formula ./packaging/homebrew/Formula/sing-box-wigner.rb
+          brew install wignerStan/release-ci/sing-box-wigner
       - name: Verify installed product surface
         run: |
           set -euxo pipefail
@@ -43,4 +46,4 @@ jobs:
           "$binary" check -c "$RUNNER_TEMP/config.json"
           "$binary" api tailscale --help | grep -i tailscale
       - name: Run formula test
-        run: brew test --verbose sing-box-wigner
+        run: brew test --verbose wignerStan/release-ci/sing-box-wigner
