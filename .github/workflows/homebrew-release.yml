@@ -1,0 +1,49 @@
+name: Homebrew release formula
+on:
+  pull_request:
+    branches: [testing]
+    paths:
+      - 'packaging/homebrew/**'
+      - '.github/workflows/homebrew-release.yml'
+  push:
+    branches: [packaging/homebrew/release-v1.14.0-wigner.1]
+    paths:
+      - 'packaging/homebrew/**'
+      - '.github/workflows/homebrew-release.yml'
+permissions:
+  contents: read
+jobs:
+  formula:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Stage reviewed formula in an ephemeral tap
+        run: |
+          set -euxo pipefail
+          ruby -c packaging/homebrew/Formula/sing-box-wigner.rb
+          brew tap-new wignerStan/release-ci
+          tap_dir="$(brew --repository wignerStan/release-ci)"
+          cp packaging/homebrew/Formula/sing-box-wigner.rb "$tap_dir/Formula/sing-box-wigner.rb"
+          brew style "$tap_dir/Formula/sing-box-wigner.rb"
+      - name: Install from immutable release source
+        run: |
+          set -euxo pipefail
+          brew install wignerStan/release-ci/sing-box-wigner
+      - name: Verify installed product surface
+        run: |
+          set -euxo pipefail
+          binary="$(brew --prefix sing-box-wigner)/bin/sing-box"
+          "$binary" version | grep -F '1.14.0-wigner.1'
+          cat > "$RUNNER_TEMP/config.json" <<'JSON'
+          {"inbounds":[{"type":"mixed","listen":"127.0.0.1","listen_port":1080}]}
+          JSON
+          "$binary" check -c "$RUNNER_TEMP/config.json"
+          "$binary" api tailscale --help | grep -i tailscale
+      - name: Run formula test
+        run: brew test --verbose wignerStan/release-ci/sing-box-wigner
