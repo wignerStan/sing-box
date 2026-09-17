@@ -62,6 +62,25 @@ tagged package tests and the complete sing-box build unchanged. Removing nested
 changing `git add` or `git archive` output for the parent-owned projection. Any
 change to this closed receipt is a reviewed dependency transition.
 
+## Acceptance gates
+
+A source or dependency update is accepted only when all of these pass on the
+exact reviewed head:
+
+- the repository's normal Linux, macOS, and Windows Go test matrix;
+- the repository's normal cross-platform golangci-lint matrix;
+- deterministic source-required patch and vendor verification on Linux and
+  macOS;
+- race tests and vet for the patched DAE and Tailscale modules;
+- combined sing-box race tests, vet, and builds from standard Go vendor mode;
+- real DAE eBPF datapath/recovery and real Tailscale iptables/nftables packet
+  tests on disposable Linux runners;
+- the standalone Tailscale 1.94.2 backport tests and builds;
+- an offline clean `git archive` build without submodules or module downloads.
+
+Passing an isolated feature branch is not sufficient. The final integration head
+must carry the check results used for merge and release.
+
 ## Build and release
 
 Normal repository builds use Go's standard vendor mode. The checked-in
