@@ -48,16 +48,6 @@ func routeOperationMayHaveApplied(err error) bool {
 	return true
 }
 
-// Keep the small operation helpers for package-local callers and older tests;
-// the manager uses apply so test doubles can observe the complete lifecycle.
-func addScopedDefault(r systemRoute) error {
-	return executeScopedRoute(unix.RTM_ADD, r)
-}
-
-func deleteScopedDefault(r systemRoute) error {
-	return executeScopedRoute(unix.RTM_DELETE, r)
-}
-
 func executeScopedRoute(messageType int, r systemRoute) error {
 	id := uintptr(os.Getpid())
 	seq := int(systemRouteMessageSeq.Add(1))

@@ -483,16 +483,16 @@ func (t *Inbound) Start(stage adapter.StartStage) error {
 			memoryPressure = oomKiller.MemoryPressure
 		}
 		tunStack, err := tun.NewStack(t.stack, tun.StackOptions{
-			Context:                t.ctx,
-			Tun:                    tunInterface,
-			TunOptions:             t.tunOptions,
-			UDPTimeout:             t.udpTimeout,
-			ICMPTimeout:            C.ICMPTimeout,
-			UDPMapping:             t.udpMapping,
-			UDPFiltering:           t.udpFiltering,
-			UDPNATMax:              t.udpNATMax,
-			Handler:                t,
-			Logger:                 t.logger,
+			Context:      t.ctx,
+			Tun:          tunInterface,
+			TunOptions:   t.tunOptions,
+			UDPTimeout:   t.udpTimeout,
+			ICMPTimeout:  C.ICMPTimeout,
+			UDPMapping:   t.udpMapping,
+			UDPFiltering: t.udpFiltering,
+			UDPNATMax:    t.udpNATMax,
+			Handler:      t,
+			Logger:       t.logger,
 			// The system-stack forwarder must not bind its sockets to the TUN
 			// interface on Darwin. With auto_route enabled that sends its own
 			// TCP SYNs back into utun100, leaving every connection in SYN_SENT.

@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	errSystemRouteAddressPending   = errors.New("Tailscale address is not ready for system exit route")
-	errSystemRouteInterfacePending = errors.New("Tailscale system interface is not ready")
+	errSystemRouteAddressPending   = errors.New("tailscale address is not ready for system exit route")
+	errSystemRouteInterfacePending = errors.New("tailscale system interface is not ready")
 )
 
 // systemExitRouteReconciler owns the exit-node default routes for a system-interface
