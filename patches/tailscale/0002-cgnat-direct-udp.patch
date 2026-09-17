@@ -1,0 +1,546 @@
+diff --git a/CGNAT_DIRECT_UDP.md b/CGNAT_DIRECT_UDP.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad0b336e1a39ebcedb7d50b2a605f25fe75002a5
+--- /dev/null
++++ b/CGNAT_DIRECT_UDP.md
+@@ -0,0 +1,28 @@
++# Direct UDP over an overlapping RFC 6598 underlay
++
++This fork advertises CGNAT IPv4 addresses from up, broadcast-capable Ethernet-like
++interfaces (Wi-Fi, Ethernet, bridges and veths). It excludes registered/conventional
++Tailscale interfaces, loopback, point-to-point and unclassified non-broadcast
++CGNAT interfaces, and the Tailscale IPv6 ULA. Addresses are re-enumerated rather
++than cached, so DHCP changes do not require hard-coded endpoint addresses.
++
++Both Linux firewall implementations put the existing magicsock UDP destination
++port exception before CGNAT drop/return rules. Other UDP ports, TCP and forwarded
++traffic retain their existing protections. This does not disable netfilter or
++add a blanket CGNAT allow. The UDP listener still authenticates transport packets.
++
++For a sing-box system endpoint, use the matching sing-box integration and a fixed
++`listen_port` when a host firewall needs a stable destination port. The Linux
++standalone peer needs this discovery/firewall fix too. Updating only the Mac
++cannot make an unadvertised/filtered peer reachable.
++
++A campus AP/controller can still block station-to-station UDP. Passing these
++regression tests is not proof of reachability on that physical network. Confirm
++both peers advertise their current underlay addresses and that native Tailscale
++ping reports a direct physical address:port rather than DERP. Packet captures
++must distinguish no packet reaching an interface from a local firewall drop.
++
++The kernel test is deliberately opt-in (`cgnat_integration` build tag), requires
++root and a fixture interface, and is run only in disposable network namespaces.
++It verifies UDP round trips, rejects a different UDP port and TCP on the same
++port, then verifies port replacement and cleanup with iptables and nftables.
+diff --git a/net/netmon/interfaces.go b/net/netmon/interfaces.go
+index c3a7913402dd6787fdcd73695f58f5ea251f6f2e..eaf95cf391fea5b47ecf173c16566cadfefe4f6f 100644
+--- a/net/netmon/interfaces.go
++++ b/net/netmon/interfaces.go
+@@ -56,6 +56,12 @@ func (m *Monitor) SetTailscaleInterfaceName(ifName string) {
+ //
+ // This should be called as early as possible during tailscaled startup.
+ func SetTailscaleInterfaceProps(ifName string, ifIndex int) {
++	// An embedding application releases these process-global properties when
++	// its endpoint closes. Clearing must not depend on OS enumeration working.
++	if ifName == "" {
++		tsIfProps.set("", 0)
++		return
++	}
+ 	if ifIndex != 0 {
+ 		tsIfProps.set(ifName, ifIndex)
+ 		return
+diff --git a/net/netmon/local_addresses_cgnat_test.go b/net/netmon/local_addresses_cgnat_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..c81ed23b19ac22a1a0720b76524b17f1ad1f6486
+--- /dev/null
++++ b/net/netmon/local_addresses_cgnat_test.go
+@@ -0,0 +1,102 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++package netmon
++
++import (
++	"net"
++	"net/netip"
++	"reflect"
++	"testing"
++)
++
++func cgnatTestInterface(name string, flags net.Flags, addresses ...string) Interface {
++	addrs := make([]net.Addr, 0, len(addresses))
++	for _, address := range addresses {
++		p := netip.MustParsePrefix(address)
++		addrs = append(addrs, &net.IPNet{IP: p.Addr().AsSlice(), Mask: net.CIDRMask(p.Bits(), p.Addr().BitLen())})
++	}
++	return Interface{Interface: &net.Interface{Name: name, Flags: flags}, AltAddrs: addrs}
++}
++
++func TestLocalAddressesCGNATUnderlay(t *testing.T) {
++	oldName, _ := TailscaleInterfaceName()
++	oldIndex, _ := TailscaleInterfaceIndex()
++	t.Cleanup(func() { SetTailscaleInterfaceProps(oldName, oldIndex) })
++	SetTailscaleInterfaceProps("custom-tap", 42)
++	up := net.FlagUp
++	lan := up | net.FlagBroadcast | net.FlagMulticast
++	cases := []struct {
++		name  string
++		iface Interface
++		want  []netip.Addr
++	}{
++		{"wifi", cgnatTestInterface("en0", lan, "100.65.10.7/16"), []netip.Addr{netip.MustParseAddr("100.65.10.7")}},
++		{"ethernet", cgnatTestInterface("eth0", lan, "100.64.10.8/24"), []netip.Addr{netip.MustParseAddr("100.64.10.8")}},
++		{"bridge", cgnatTestInterface("br0", lan, "100.64.11.8/24"), []netip.Addr{netip.MustParseAddr("100.64.11.8")}},
++		{"renamed-tun", cgnatTestInterface("overlay0", up|net.FlagPointToPoint, "100.100.10.1/32"), nil},
++		{"wireguard", cgnatTestInterface("wg0", up, "100.100.10.1/32"), nil},
++		{"utun", cgnatTestInterface("utun101", up|net.FlagPointToPoint, "100.100.10.1/32", "fd7a:115c:a1e0::1/128"), nil},
++		{"registered-tap", cgnatTestInterface("custom-tap", lan, "100.100.10.1/32", "192.168.99.1/24"), nil},
++		{"other-tailscale", cgnatTestInterface("tailscale0", lan, "100.100.10.1/32"), nil},
++		{"tailscale-ula", cgnatTestInterface("en0", lan, "fd7a:115c:a1e0::1/128"), nil},
++		{"down", cgnatTestInterface("en0", net.FlagBroadcast, "100.65.10.7/16"), nil},
++		{"loopback-cgnat", cgnatTestInterface("lo0", up|net.FlagLoopback, "100.65.10.7/32"), nil},
++		{"problematic-overlay", cgnatTestInterface("zt0", lan, "100.65.10.7/16"), nil},
++		{"nil-interface", Interface{}, nil},
++	}
++	for _, tt := range cases {
++		t.Run(tt.name, func(t *testing.T) {
++			got, _, err := localAddresses([]Interface{tt.iface})
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !reflect.DeepEqual(got, tt.want) {
++				t.Fatalf("got %v, want %v", got, tt.want)
++			}
++		})
++	}
++}
++
++func TestLocalAddressesCGNATHandover(t *testing.T) {
++	lan := net.FlagUp | net.FlagBroadcast
++	for _, address := range []string{"100.65.10.7/16", "100.64.11.8/24"} {
++		got, _, err := localAddresses([]Interface{
++			cgnatTestInterface("en0", lan, address),
++			cgnatTestInterface("utun101", net.FlagUp|net.FlagPointToPoint, "100.100.10.1/32"),
++		})
++		want := netip.MustParsePrefix(address).Addr()
++		if err != nil || len(got) != 1 || got[0] != want {
++			t.Fatalf("handover to %s: got %v, err %v", address, got, err)
++		}
++	}
++}
++
++func TestLocalAddressesPreservesFallbacks(t *testing.T) {
++	lan := net.FlagUp | net.FlagBroadcast
++	regular, loopback, err := localAddresses([]Interface{
++		cgnatTestInterface("eth0", lan, "192.168.1.5/24", "2001:db8::1/64", "2001:db8::2/64", "2001:db8::3/64", "fe80::1/64"),
++		cgnatTestInterface("lo", net.FlagUp|net.FlagLoopback, "127.0.0.1/8"),
++	})
++	if err != nil || len(regular) != 3 || len(loopback) != 1 {
++		t.Fatalf("regular=%v loopback=%v err=%v", regular, loopback, err)
++	}
++	regular, _, err = localAddresses([]Interface{cgnatTestInterface("eth0", lan, "169.254.1.2/16", "fd00::1/64", "fe80::1/64")})
++	if err != nil || len(regular) != 2 {
++		t.Fatalf("fallback=%v err=%v", regular, err)
++	}
++}
++
++func TestClearTailscaleInterfaceProps(t *testing.T) {
++	oldName, _ := TailscaleInterfaceName()
++	oldIndex, _ := TailscaleInterfaceIndex()
++	t.Cleanup(func() { SetTailscaleInterfaceProps(oldName, oldIndex) })
++	SetTailscaleInterfaceProps("custom-tun", 42)
++	SetTailscaleInterfaceProps("", 0)
++	if name, err := TailscaleInterfaceName(); err == nil || name != "" {
++		t.Fatalf("name not cleared: %q, %v", name, err)
++	}
++	if index, err := TailscaleInterfaceIndex(); err == nil || index != 0 {
++		t.Fatalf("index not cleared: %d, %v", index, err)
++	}
++}
+diff --git a/net/netmon/state.go b/net/netmon/state.go
+index 0081b86b2be12a63e4d15aed118062bf13417187..a5cdf60027a281ace9599af1de624ba22172a367 100644
+--- a/net/netmon/state.go
++++ b/net/netmon/state.go
+@@ -62,16 +62,28 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
+ 	if err != nil {
+ 		return nil, nil, err
+ 	}
++	return localAddresses(ifaces)
++}
++
++// localAddresses separates enumeration from policy so topology changes can be
++// tested without modifying the host's network interfaces.
++func localAddresses(ifaces []Interface) (regular, loopback []netip.Addr, err error) {
+ 	var regular4, regular6, linklocal4, ula6 []netip.Addr
+ 	for _, iface := range ifaces {
+ 		stdIf := iface.Interface
+-		if !isUp(stdIf) || isProblematicInterface(stdIf) {
++		if stdIf == nil || !isUp(stdIf) || isProblematicInterface(stdIf) || isTailscaleInterface(stdIf.Name, nil) {
+ 			// Skip down interfaces and ones that are
+ 			// problematic that we don't want to try to
+ 			// send Tailscale traffic over.
+ 			continue
+ 		}
+ 		ifcIsLoopback := isLoopback(stdIf)
++		// RFC 6598 addresses can belong to the underlay (for example, campus
++		// Wi-Fi or an ISP). Permit them on Ethernet-like interfaces, including
++		// bridges/veths, but keep filtering them on unclassified L3 tunnels.
++		// A range check alone cannot identify a Tailscale interface.
++		allowCGNAT := stdIf.Flags&net.FlagBroadcast != 0 &&
++			stdIf.Flags&(net.FlagLoopback|net.FlagPointToPoint) == 0
+ 
+ 		addrs, err := iface.Addrs()
+ 		if err != nil {
+@@ -86,12 +98,9 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
+ 					continue
+ 				}
+ 				ip = ip.Unmap()
+-				// TODO(apenwarr): don't special case cgNAT.
+-				// In the general wireguard case, it might
+-				// very well be something we can route to
+-				// directly, because both nodes are
+-				// behind the same CGNAT router.
+-				if tsaddr.IsTailscaleIP(ip) {
++				// Never advertise Tailscale's IPv6 ULA, or CGNAT addresses on
++				// loopback/point-to-point/unknown non-broadcast interfaces.
++				if tsaddr.IsTailscaleIP(ip) && (!ip.Is4() || !allowCGNAT) {
+ 					continue
+ 				}
+ 				if ip.IsLoopback() || ifcIsLoopback {
+@@ -562,10 +571,11 @@ func hasTailscaleIP(pfxs []netip.Prefix) bool {
+ func isTailscaleInterface(name string, ips []netip.Prefix) bool {
+ 	// Sandboxed macOS and Plan9 (and anything else that explicitly calls SetTailscaleInterfaceProps).
+ 	tsIfName, err := TailscaleInterfaceName()
+-	if err == nil {
+-		// If we've been told the Tailscale interface name, use that.
+-		return name == tsIfName
++	if err == nil && name == tsIfName {
++		return true
+ 	}
++	// A registered custom name does not make other Tailscale interfaces
++	// safe underlays. Keep the conventional-name/address checks below.
+ 
+ 	// The sandboxed app should (as of 1.92) set the tun interface name via SetTailscaleInterfaceProps
+ 	// early in the startup process.  The non-sandboxed app does not.
+diff --git a/scripts/test-cgnat-kernel.sh b/scripts/test-cgnat-kernel.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba9036055aeacc07273eeeb8f0326cc0e344c20e
+--- /dev/null
++++ b/scripts/test-cgnat-kernel.sh
+@@ -0,0 +1,30 @@
++#!/usr/bin/env bash
++# Test-only harness. Never installs rules in the host namespace.
++set -euo pipefail
++binary=$(realpath "$1")
++cleanup() {
++  sudo ip netns del cgnat-host 2>/dev/null || true
++  sudo ip netns del cgnat-peer 2>/dev/null || true
++}
++# Do not delete a namespace that was not created by this invocation.
++for name in cgnat-host cgnat-peer; do
++  if sudo ip netns list | grep -q "^$name\( \|$\)"; then
++    echo "test namespace already exists: $name" >&2
++    exit 1
++  fi
++done
++trap cleanup EXIT
++for mode in iptables nftables; do
++  sudo ip netns add cgnat-host
++  sudo ip netns add cgnat-peer
++  sudo ip -n cgnat-host link add cghost type veth peer name cgpeer netns cgnat-peer
++  sudo ip -n cgnat-host addr add 100.64.50.2/24 dev cghost
++  sudo ip -n cgnat-peer addr add 100.64.50.1/24 dev cgpeer
++  sudo ip -n cgnat-host link set lo up
++  sudo ip -n cgnat-peer link set lo up
++  sudo ip -n cgnat-host link set cghost up
++  sudo ip -n cgnat-peer link set cgpeer up
++  sudo ip netns exec cgnat-host env TS_CGNAT_TEST_FIREWALL="$mode" \
++    "$binary" -test.run '^TestCGNATTransportKernel$' -test.count=1 -test.v
++  cleanup
++done
+diff --git a/util/linuxfw/iptables_runner.go b/util/linuxfw/iptables_runner.go
+index b18f0e7ebb1d080afc9cf0991b52cb5fd2bc0bc8..5d7de5c0afbc39f1bba6e4a65759cfa02624b51d 100644
+--- a/util/linuxfw/iptables_runner.go
++++ b/util/linuxfw/iptables_runner.go
+@@ -641,7 +641,7 @@ func (i *iptablesRunner) DelConnmarkSaveRule() error {
+ // to describe a rule accepting traffic on a particular port to iptables. It is
+ // separated out here to avoid repetition in AddMagicsockPortRule and
+ // RemoveMagicsockPortRule, since it is important that the same rule is passed
+-// to Append() and Delete().
++// to Insert() and Delete().
+ func buildMagicsockPortRule(port uint16) []string {
+ 	return []string{"-p", "udp", "--dport", strconv.FormatUint(uint64(port), 10), "-j", "ACCEPT"}
+ }
+@@ -663,7 +663,10 @@ func (i *iptablesRunner) AddMagicsockPortRule(port uint16, network string) error
+ 
+ 	args := buildMagicsockPortRule(port)
+ 
+-	if err := ipt.Append("filter", "ts-input", args...); err != nil {
++	// Encrypted transport must reach magicsock before the CGNAT spoofing
++	// drop. Only this UDP destination port is exempt; other CGNAT traffic
++	// still traverses the existing INPUT and FORWARD protections.
++	if err := ipt.Insert("filter", "ts-input", 1, args...); err != nil {
+ 		return fmt.Errorf("adding %v in filter/ts-input: %w", args, err)
+ 	}
+ 
+diff --git a/util/linuxfw/magicsock_cgnat_integration_test.go b/util/linuxfw/magicsock_cgnat_integration_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..f1e69a91553ae45e313e1851fdd5e74ee703018a
+--- /dev/null
++++ b/util/linuxfw/magicsock_cgnat_integration_test.go
+@@ -0,0 +1,136 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build linux && cgnat_integration && !ts_omit_iptables
++
++package linuxfw
++
++import (
++	"bytes"
++	"errors"
++
++	"fmt"
++	"github.com/coreos/go-iptables/iptables"
++	"net"
++	"os"
++	"os/exec"
++	"strconv"
++	"testing"
++	"time"
++)
++
++// Run only inside the two disposable namespaces made by the CI harness. This
++// exercises real kernel packet filtering, not a source-text/order assertion.
++func TestCGNATTransportKernel(t *testing.T) {
++	mode := os.Getenv("TS_CGNAT_TEST_FIREWALL")
++	if mode == "" {
++		t.Skip("requires isolated cgnat-host/cgnat-peer namespaces")
++	}
++	if os.Geteuid() != 0 {
++		t.Fatal("requires root in disposable namespace")
++	}
++	// Upstream unit tests replace this process-global predicate with a fake
++	// string matcher. Use the real classifier only for this isolated kernel test.
++	oldClassifier := isNotExistError
++	isNotExistError = func(err error) bool {
++		var iptErr *iptables.Error
++		return errors.As(err, &iptErr) && iptErr.IsNotExist()
++	}
++	t.Cleanup(func() { isNotExistError = oldClassifier })
++
++	if _, err := net.InterfaceByName("cghost"); err != nil {
++		t.Fatal("refusing to change firewall outside test namespace")
++	}
++	var runner NetfilterRunner
++	var err error
++	switch mode {
++	case "iptables":
++		runner, err = newIPTablesRunner(t.Logf)
++	case "nftables":
++		runner, err = newNfTablesRunner(t.Logf)
++	default:
++		t.Fatalf("unsupported test firewall %q", mode)
++	}
++	if err != nil {
++		t.Fatal(err)
++	}
++	must := func(err error) {
++		t.Helper()
++		if err != nil {
++			t.Fatal(err)
++		}
++	}
++	must(runner.AddChains())
++	t.Cleanup(func() {
++		if err := runner.DelHooks(t.Logf); err != nil {
++			t.Error(err)
++		}
++		if err := runner.DelChains(); err != nil {
++			t.Error(err)
++		}
++	})
++	must(runner.AddHooks())
++	must(runner.AddBase("tailscale0"))
++	must(runner.AddExternalCGNATRules(CGNATModeDrop, "tailscale0"))
++	listen := func(port int) *net.UDPConn {
++		c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("100.64.50.2"), Port: port})
++		must(err)
++		t.Cleanup(func() { c.Close() })
++		return c
++	}
++	first, second := listen(41641), listen(41642)
++	probe := func(c *net.UDPConn, accepted bool) {
++		t.Helper()
++		code := `import socket,sys
++s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
++s.bind(("100.64.50.1",0)); s.settimeout(1)
++s.sendto(b"cgnat-regression",("100.64.50.2",int(sys.argv[1])))
++try: ok=s.recv(128)==b"cgnat-regression"
++except socket.timeout: ok=False
++sys.exit(0 if ok==(sys.argv[2]=="true") else 1)`
++		cmd := exec.Command("ip", "netns", "exec", "cgnat-peer", "python3", "-c", code, strconv.Itoa(c.LocalAddr().(*net.UDPAddr).Port), strconv.FormatBool(accepted))
++		var output bytes.Buffer
++		cmd.Stdout = &output
++		cmd.Stderr = &output
++		must(c.SetReadDeadline(time.Now().Add(1500 * time.Millisecond)))
++		must(cmd.Start())
++		buf := make([]byte, 128)
++		n, peer, readErr := c.ReadFromUDP(buf)
++		if readErr == nil {
++			_, err = c.WriteToUDP(buf[:n], peer)
++			must(err)
++		}
++		commandErr := cmd.Wait()
++		if accepted != (readErr == nil) {
++			t.Fatalf("accepted=%v, read=%v", accepted, readErr)
++		}
++		if readErr != nil {
++			if ne, ok := readErr.(net.Error); !ok || !ne.Timeout() {
++				t.Fatal(readErr)
++			}
++		}
++		if commandErr != nil {
++			t.Fatalf("peer probe: %v: %s", commandErr, output.String())
++		}
++		t.Logf("%s UDP/%d accepted=%v", mode, c.LocalAddr().(*net.UDPAddr).Port, accepted)
++	}
++	probe(first, false)
++	must(runner.AddMagicsockPortRule(41641, "udp4"))
++	probe(first, true)
++	probe(second, false)
++	tcp, err := net.Listen("tcp4", "100.64.50.2:41641")
++	must(err)
++	defer tcp.Close()
++	code := `import socket,sys
++s=socket.socket(); s.settimeout(0.5)
++sys.exit(1 if s.connect_ex(("100.64.50.2",41641))==0 else 0)`
++	if out, err := exec.Command("ip", "netns", "exec", "cgnat-peer", "python3", "-c", code).CombinedOutput(); err != nil {
++		t.Fatal(fmt.Errorf("non-UDP spoof protection: %w: %s", err, out))
++	}
++	must(runner.DelMagicsockPortRule(41641, "udp4"))
++	must(runner.AddMagicsockPortRule(41642, "udp4"))
++	probe(first, false)
++	probe(second, true)
++	must(runner.DelMagicsockPortRule(41642, "udp4"))
++	probe(second, false)
++}
+diff --git a/util/linuxfw/magicsock_cgnat_test.go b/util/linuxfw/magicsock_cgnat_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..56f5be26f098f7a2ada0d3443d70e62a1e45331a
+--- /dev/null
++++ b/util/linuxfw/magicsock_cgnat_test.go
+@@ -0,0 +1,98 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build linux
++
++package linuxfw
++
++import (
++	"fmt"
++	"github.com/google/nftables"
++	"github.com/mdlayher/netlink"
++	"golang.org/x/sys/unix"
++	"slices"
++	"testing"
++)
++
++type cgnatRecordingIPTables struct {
++	iptablesInterface
++	rules [][]string
++}
++
++func (r *cgnatRecordingIPTables) Insert(table, chain string, pos int, args ...string) error {
++	if table != "filter" || chain != "ts-input" || pos < 1 || pos > len(r.rules)+1 {
++		return fmt.Errorf("bad insertion: %s/%s/%d", table, chain, pos)
++	}
++	r.rules = slices.Insert(r.rules, pos-1, slices.Clone(args))
++	return nil
++}
++func (r *cgnatRecordingIPTables) Append(table, chain string, args ...string) error {
++	r.rules = append(r.rules, slices.Clone(args))
++	return nil
++}
++func (r *cgnatRecordingIPTables) Delete(table, chain string, args ...string) error {
++	for i, rule := range r.rules {
++		if slices.Equal(rule, args) {
++			r.rules = slices.Delete(r.rules, i, i+1)
++			return nil
++		}
++	}
++	return fmt.Errorf("rule not found")
++}
++func TestMagicsockCGNATIPTablesOrderAndCleanup(t *testing.T) {
++	for _, network := range []string{"udp4", "udp6"} {
++		t.Run(network, func(t *testing.T) {
++			drop := []string{"!", "-i", "tailscale0", "-s", "100.64.0.0/10", "-j", "DROP"}
++			recorder := &cgnatRecordingIPTables{rules: [][]string{slices.Clone(drop)}}
++			r := &iptablesRunner{ipt4: recorder, ipt6: recorder}
++			for _, port := range []uint16{41641, 41642} {
++				if err := r.AddMagicsockPortRule(port, network); err != nil {
++					t.Fatal(err)
++				}
++				if !slices.Equal(recorder.rules[0], buildMagicsockPortRule(port)) {
++					t.Fatal("transport exception is behind CGNAT drop")
++				}
++				if !slices.Equal(recorder.rules[1], drop) {
++					t.Fatal("CGNAT spoofing protection changed")
++				}
++				if err := r.DelMagicsockPortRule(port, network); err != nil {
++					t.Fatal(err)
++				}
++				if len(recorder.rules) != 1 || !slices.Equal(recorder.rules[0], drop) {
++					t.Fatal("cleanup changed unrelated rules")
++				}
++			}
++			if err := r.AddMagicsockPortRule(41641, "tcp4"); err == nil {
++				t.Fatal("accepted unsupported transport")
++			}
++		})
++	}
++}
++func TestMagicsockCGNATNFTablesPrepend(t *testing.T) {
++	for _, family := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
++		rules := 0
++		conn, err := nftables.New(nftables.WithTestDial(func(messages []netlink.Message) ([]netlink.Message, error) {
++			for _, msg := range messages {
++				if uint16(msg.Header.Type) != uint16(unix.NFNL_SUBSYS_NFTABLES<<8|unix.NFT_MSG_NEWRULE) {
++					continue
++				}
++				rules++
++				if msg.Header.Flags&netlink.HeaderFlags(unix.NLM_F_APPEND) != 0 {
++					t.Error("transport exception was appended, not prepended")
++				}
++			}
++			return nil, nil
++		}))
++		if err != nil {
++			t.Fatal(err)
++		}
++		table := &nftables.Table{Name: "filter", Family: family}
++		chain := &nftables.Chain{Name: "ts-input", Table: table}
++		if err := addAcceptOnPortRule(conn, table, chain, 41641); err != nil {
++			t.Fatal(err)
++		}
++		if rules != 1 {
++			t.Fatalf("wrote %d transport rules, want 1", rules)
++		}
++	}
++}
+diff --git a/util/linuxfw/nftables_runner.go b/util/linuxfw/nftables_runner.go
+index 7a534f229f396b29a82a9f873c31bef417c31a6b..c2455f43714b9fa4d2a4c9cae725a9140b19bb93 100644
+--- a/util/linuxfw/nftables_runner.go
++++ b/util/linuxfw/nftables_runner.go
+@@ -1528,7 +1528,9 @@ func createAcceptOnPortRule(table *nftables.Table, chain *nftables.Chain, port u
+ // a given destination UDP port.
+ func addAcceptOnPortRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16) error {
+ 	rule := createAcceptOnPortRule(table, chain, port)
+-	_ = conn.AddRule(rule)
++	// Prepend the transport-only exception before CGNAT drop/return rules.
++	// Do not remove or broaden the spoofing protections for other traffic.
++	_ = conn.InsertRule(rule)
+ 
+ 	if err := conn.Flush(); err != nil {
+ 		return fmt.Errorf("flush add rule: %w", err)

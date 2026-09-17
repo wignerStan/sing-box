@@ -1,0 +1,13 @@
+{
+  "kind": "patched_third_party",
+  "materialization": "vendor/tailscale",
+  "name": "tailscale",
+  "public_api": "github.com/sagernet/tailscale",
+  "schema_version": "sing-box-patched-source/v1",
+  "series": "patches/tailscale/series",
+  "source": {
+    "commit": "c8e28eeffe16a390ae8e320500175de6207f521f",
+    "path": "third_party/tailscale",
+    "url": "https://github.com/SagerNet/tailscale.git"
+  }
+}

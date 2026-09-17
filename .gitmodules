@@ -7,3 +7,12 @@
 [submodule "clients/desktop"]
 	path = clients/desktop
 	url = https://github.com/SagerNet/sing-box-for-desktop.git
+[submodule "third_party/dae"]
+	path = third_party/dae
+	url = https://github.com/daeuniverse/dae.git
+[submodule "third_party/tailscale"]
+	path = third_party/tailscale
+	url = https://github.com/SagerNet/tailscale.git
+[submodule "third_party/tailscale-1.94.2"]
+	path = third_party/tailscale-1.94.2
+	url = https://github.com/tailscale/tailscale.git
