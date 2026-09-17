@@ -657,22 +657,18 @@ func TestSystemExitRouteReconcilerConcurrentLifecycle(t *testing.T) {
 	}
 	start := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 8 {
+		wg.Go(func() {
 			<-start
-			for j := 0; j < 100; j++ {
+			for j := range 100 {
 				_, _ = manager.Update(j%2 == 0, ip4, ip6)
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		<-start
 		_ = manager.Close()
-	}()
+	})
 	close(start)
 	wg.Wait()
 	if err := manager.Close(); err != nil {
@@ -806,6 +802,7 @@ func FuzzScopedRouteMessageValidation(f *testing.F) {
 		_, _ = marshalScopedRouteMessage(int(typ), route, 23, 29)
 	})
 }
+
 func TestSystemExitRouteReconcilerReturnsMissingFamilyDeadline(t *testing.T) {
 	ip4 := netip.MustParseAddr("100.71.1.1")
 	ip6 := netip.MustParseAddr("fd7a:115c:a1e0::1")

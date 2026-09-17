@@ -110,7 +110,7 @@ func (r *darwinSystemExitRouteReconciler) Update(enabled bool, ip4, ip6 netip.Ad
 		var err error
 		if4, if6, err = indexes()
 		if err != nil {
-			return 0, fmt.Errorf("Tailscale interface %q index lookup: %w", r.name, err)
+			return 0, fmt.Errorf("tailscale interface %q index lookup: %w", r.name, err)
 		}
 		if (wantIPv4 && (if4 <= 0 || if4 > 0xffff)) ||
 			(wantIPv6 && (if6 <= 0 || if6 > 0xffff)) {
@@ -158,10 +158,7 @@ func (r *darwinSystemExitRouteReconciler) Update(enabled bool, ip4, ip6 netip.Ad
 				missingSince = r.now()
 				r.missingSince[family] = missingSince
 			}
-			elapsed := r.now().Sub(missingSince)
-			if elapsed < 0 {
-				elapsed = 0
-			}
+			elapsed := max(r.now().Sub(missingSince), 0)
 			if elapsed < systemRouteHandoverGrace {
 				remaining := systemRouteHandoverGrace - elapsed
 				if nextUpdate == 0 || remaining < nextUpdate {
@@ -402,7 +399,7 @@ func scopedRouteError(family systemRouteFamily, operation string, err error) err
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("Tailscale %s route %s: %w", systemRouteFamilyName(family), operation, err)
+	return fmt.Errorf("tailscale %s route %s: %w", systemRouteFamilyName(family), operation, err)
 }
 
 func systemRouteFamilyName(family systemRouteFamily) string {
