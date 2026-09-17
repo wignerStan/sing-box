@@ -133,7 +133,7 @@ func (f *systemExitRouteFacility) Stop() {
 func (f *systemExitRouteFacility) Close() error {
 	f.Stop()
 	var lastErr error
-	for attempt := 0; attempt < systemExitRouteCloseAttempts; attempt++ {
+	for attempt := range systemExitRouteCloseAttempts {
 		lastErr = f.closeReconciler()
 		if lastErr == nil || !isTransientSystemRouteError(lastErr) {
 			return lastErr
