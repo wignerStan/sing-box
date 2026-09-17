@@ -16,13 +16,19 @@ The source URL and SHA-256 bind the formula to the accepted sing-box merge and
 its release assets. A future update changes the version, immutable release URL,
 and digest together after the product acceptance and release workflows pass.
 
-A dedicated `wignerStan/homebrew-tap` repository is currently absent. Until a
-tap repository is re-established, this file remains the reviewed packaging
-authority and can be tested directly:
+A dedicated `wignerStan/homebrew-tap` repository is currently absent. Modern
+Homebrew requires formulas to live inside a tap, so test the reviewed formula by
+staging it in a local tap:
 
 ```sh
-brew install --formula ./packaging/homebrew/Formula/sing-box-wigner.rb
+brew tap-new wignerStan/release-local
+tap_dir="$(brew --repository wignerStan/release-local)"
+cp packaging/homebrew/Formula/sing-box-wigner.rb \
+  "$tap_dir/Formula/sing-box-wigner.rb"
+brew install wignerStan/release-local/sing-box-wigner
+brew test wignerStan/release-local/sing-box-wigner
 ```
 
-When a tap is restored, publish this exact reviewed formula there. The tap is a
-release-distribution surface, not another editable source or patch authority.
+When a remote tap is restored, publish this exact reviewed formula there. The
+tap is a release-distribution surface, not another editable source or patch
+authority.
