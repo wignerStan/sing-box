@@ -1,0 +1,13 @@
+{
+  "kind": "patched_third_party",
+  "materialization": "vendor/dae/ebpfinbound",
+  "name": "dae-ebpfinbound",
+  "public_api": "github.com/daeuniverse/dae/ebpfinbound",
+  "schema_version": "sing-box-patched-source/v1",
+  "series": "patches/dae/series",
+  "source": {
+    "commit": "5db27a0028d36e7847bd3796497df952337a20e2",
+    "path": "third_party/dae",
+    "url": "https://github.com/daeuniverse/dae.git"
+  }
+}

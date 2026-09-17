@@ -1,0 +1,647 @@
+{
+  "authority": "wignerStan/sing-box",
+  "components": [
+    {
+      "generation_input": {
+        "path": ".vendor-work/dae/ebpfinbound",
+        "tracked": false
+      },
+      "module": "github.com/daeuniverse/dae/ebpfinbound",
+      "name": "dae-ebpfinbound",
+      "patches": [
+        {
+          "order": 1,
+          "path": "patches/dae/0001-ebpfinbound-runtime.patch",
+          "sha256": "8fef2068d26498789bc7a5acb5f63abde2746880bb0398884abc392347017795"
+        },
+        {
+          "order": 2,
+          "path": "patches/dae/0002-namespace-identity.patch",
+          "sha256": "aebac8f61464fbbea8aaa21e0d38e7b27796e6b402d64040d9bae8c15bed512b"
+        }
+      ],
+      "result_tree": "5db9c18ac05342ff422f034e702fb4b8d56f8bc4",
+      "source": {
+        "commit": "5db27a0028d36e7847bd3796497df952337a20e2",
+        "path": "third_party/dae"
+      }
+    },
+    {
+      "generation_input": {
+        "path": ".vendor-work/tailscale",
+        "tracked": false
+      },
+      "module": "github.com/sagernet/tailscale",
+      "name": "tailscale",
+      "patches": [
+        {
+          "order": 1,
+          "path": "patches/tailscale/0001-pure-system-dataplane.patch",
+          "sha256": "f48dec6a37ccc27347785a037a9042d4e4563efa52d74ecd0a67972b65db710f"
+        },
+        {
+          "order": 2,
+          "path": "patches/tailscale/0002-cgnat-direct-udp.patch",
+          "sha256": "f1ac39a3870ce2545c435aaff0b7c7d1e2e3f5aadb697bf793b24b072010914a"
+        }
+      ],
+      "result_tree": "619a2708320b0b1bdc8460a3eea9160785b31c77",
+      "source": {
+        "commit": "c8e28eeffe16a390ae8e320500175de6207f521f",
+        "path": "third_party/tailscale"
+      }
+    }
+  ],
+  "projection": {
+    "entries": 8976,
+    "excluded_repository_metadata": [
+      {
+        "kind": "file",
+        "path": "filippo.io/age/.gitattributes",
+        "sha256": "9d46932c76b3d564d92017e1f00825385e4de59579b61b4f64351c145b1e6427",
+        "size": 39
+      },
+      {
+        "kind": "file",
+        "path": "github.com/akutz/memconn/.gitignore",
+        "sha256": "4eb4c825cb3d222f9338b8bde18caa680fb70154722b2ba17e505646459eddbf",
+        "size": 5920
+      },
+      {
+        "kind": "file",
+        "path": "github.com/anchore/go-lzo/.gitignore",
+        "sha256": "8919ad84f8aee99c39efeb584bccc5fb8519bce0b124352888348882a9830543",
+        "size": 197
+      },
+      {
+        "kind": "file",
+        "path": "github.com/anmitsu/go-shlex/.gitignore",
+        "sha256": "7b10ab101bb48cb4552b6b878c16332632b5d234513b058b80985a816c7e9aa2",
+        "size": 11
+      },
+      {
+        "kind": "file",
+        "path": "github.com/anthropics/anthropic-sdk-go/.gitignore",
+        "sha256": "7b4014f24344b391082b1c469d6b582c304207b5f27dfe91b0f87001c63fcf4b",
+        "size": 49
+      },
+      {
+        "kind": "file",
+        "path": "github.com/axiomhq/hyperloglog/.gitignore",
+        "sha256": "faa0fc14baa7576a1cd78f4c460ef132df91d00038a5edbf1315ddc9156df8ee",
+        "size": 275
+      },
+      {
+        "kind": "file",
+        "path": "github.com/caddyserver/certmagic/.gitignore",
+        "sha256": "7ad8c614ba3b0fdb668c121d2bd9333cf9dda464b19e12c03d44da11ec148767",
+        "size": 12
+      },
+      {
+        "kind": "file",
+        "path": "github.com/caddyserver/zerossl/.gitignore",
+        "sha256": "8ee5c7f14d53ccedb4805667e34b2f8aa5e6155df26fa6de582b0aff3d62798c",
+        "size": 20
+      },
+      {
+        "kind": "file",
+        "path": "github.com/cenkalti/backoff/v4/.gitignore",
+        "sha256": "e272f08f23ec8fc42032588ed44c79d4d28e4a949932f28e33d0ad702e9efd59",
+        "size": 267
+      },
+      {
+        "kind": "file",
+        "path": "github.com/cilium/ebpf/.gitattributes",
+        "sha256": "2a9a1aee69b7eb4da4ae6a41cf2167586487391fbe997ee3c91aa2fd7b4badac",
+        "size": 140
+      },
+      {
+        "kind": "file",
+        "path": "github.com/cilium/ebpf/.gitignore",
+        "sha256": "67e5d2e0718eacce86621b47122f068f06c72741404335cb1c3ce83e54c31e7f",
+        "size": 206
+      },
+      {
+        "kind": "file",
+        "path": "github.com/creack/pty/.gitignore",
+        "sha256": "1fdb0076500d848f995d28487f62701a891530b3144ed220a2e52c564c1acd5a",
+        "size": 27
+      },
+      {
+        "kind": "file",
+        "path": "github.com/dblohm7/wingoes/.gitignore",
+        "sha256": "a7c4b36aec0096916831d71c3cef2305af3b1609ee4e93c4fdf41147427ecbab",
+        "size": 290
+      },
+      {
+        "kind": "file",
+        "path": "github.com/dgrijalva/jwt-go/v4/.gitignore",
+        "sha256": "f2557469054f5397b6036b3745667535f3edfac1b05815433363f1b3780bd303",
+        "size": 16
+      },
+      {
+        "kind": "file",
+        "path": "github.com/ebitengine/purego/.gitignore",
+        "sha256": "4600d1eadad61579d602f7b4cd4f1c13a7a989e112c119d766204df1bf1f993c",
+        "size": 3
+      },
+      {
+        "kind": "file",
+        "path": "github.com/fsnotify/fsnotify/.gitignore",
+        "sha256": "7034ec798dc9168a19de7fa58dc9085146ab9fd17c33febf010699ad084f27a7",
+        "size": 125
+      },
+      {
+        "kind": "file",
+        "path": "github.com/fxamacker/cbor/v2/.gitignore",
+        "sha256": "b9175b0e088749089ed975252cfaa193d821dae694c8fb425ef8020b23831595",
+        "size": 192
+      },
+      {
+        "kind": "file",
+        "path": "github.com/gaissmai/bart/.gitignore",
+        "sha256": "18269b60ac0bbed05e05b5d5c8800b2ca422725029e8ff23abf4fbc95093117a",
+        "size": 417
+      },
+      {
+        "kind": "file",
+        "path": "github.com/go-chi/chi/v5/.gitignore",
+        "sha256": "785f18e2ac99c66b81d8d185aa1a65cfe4f39b12bef24c1f8037d85840490929",
+        "size": 20
+      },
+      {
+        "kind": "file",
+        "path": "github.com/go-chi/render/.gitignore",
+        "sha256": "667c8222edb934123a43746eed02b50c77fb0c130451148c41d1095f30b22200",
+        "size": 7
+      },
+      {
+        "kind": "file",
+        "path": "github.com/go-jose/go-jose/v4/.gitignore",
+        "sha256": "3572a4f5f4abe2efa08e852c42961d84a7d8b1ef4cdbe344d80b896b1ec884cb",
+        "size": 35
+      },
+      {
+        "kind": "file",
+        "path": "github.com/gofrs/uuid/v5/.gitignore",
+        "sha256": "6ae70743954257bf41310c431538f5f369c9e8b6ec04d4b758a59c83d4d55a08",
+        "size": 244
+      },
+      {
+        "kind": "file",
+        "path": "github.com/hashicorp/yamux/.gitignore",
+        "sha256": "4a8ce32bda0c1d55fe16d8a4544ca045456151f63d8f2b5dddb3fad848e288ec",
+        "size": 259
+      },
+      {
+        "kind": "file",
+        "path": "github.com/huin/goupnp/.gitignore",
+        "sha256": "009e2c709f2e23c0e0534e3f3e47b68424c3ea307ac44a41512386f08f426d0b",
+        "size": 36
+      },
+      {
+        "kind": "file",
+        "path": "github.com/jsimonetti/rtnetlink/.gitignore",
+        "sha256": "64ae815b9b85a566ba4242c0e84891402dbedd86e85b1a63ec71c9b4e1e7a646",
+        "size": 18
+      },
+      {
+        "kind": "file",
+        "path": "github.com/keybase/go-keychain/.gitignore",
+        "sha256": "3f8c9c780e1830278b69526668db967860605522e3e6e23a12b2217cb30946df",
+        "size": 274
+      },
+      {
+        "kind": "file",
+        "path": "github.com/klauspost/compress/.gitattributes",
+        "sha256": "abf43045649ab5cad438aa0fa217ae2407d8703671c389a3b00d68b4ba5eab19",
+        "size": 43
+      },
+      {
+        "kind": "file",
+        "path": "github.com/klauspost/compress/.gitignore",
+        "sha256": "62f51ad312d90bfd09dcf93c1f19d5d222932e538072d53ab756debdecb9b314",
+        "size": 360
+      },
+      {
+        "kind": "file",
+        "path": "github.com/klauspost/compress/huff0/.gitignore",
+        "sha256": "e9018024a463dd3fe45b889a2d33ec747bad8e484c9d750a484fd82bebdcd323",
+        "size": 16
+      },
+      {
+        "kind": "file",
+        "path": "github.com/klauspost/cpuid/v2/.gitignore",
+        "sha256": "cb568f716e3315bcebfc75bbc274b56577c2734ec3da6729ffac15919f416240",
+        "size": 266
+      },
+      {
+        "kind": "file",
+        "path": "github.com/koron/go-ssdp/.gitignore",
+        "sha256": "a898b9135d78c4f51b0de10486374cdbca241f17622dddc71da5b70a5eb064aa",
+        "size": 16
+      },
+      {
+        "kind": "file",
+        "path": "github.com/libdns/libdns/.gitignore",
+        "sha256": "7ad8c614ba3b0fdb668c121d2bd9333cf9dda464b19e12c03d44da11ec148767",
+        "size": 12
+      },
+      {
+        "kind": "file",
+        "path": "github.com/logrusorgru/aurora/.gitignore",
+        "sha256": "1b37c0780a57d6129b651d8d11f89b62a557724a70518923c2dde7d7926a386c",
+        "size": 316
+      },
+      {
+        "kind": "file",
+        "path": "github.com/mdlayher/netlink/.gitignore",
+        "sha256": "664684527e3391e45e6559b7a42179a019e7d8acd77abf7cd0851b7282365210",
+        "size": 78
+      },
+      {
+        "kind": "file",
+        "path": "github.com/mholt/acmez/v3/.gitignore",
+        "sha256": "7ad8c614ba3b0fdb668c121d2bd9333cf9dda464b19e12c03d44da11ec148767",
+        "size": 12
+      },
+      {
+        "kind": "file",
+        "path": "github.com/miekg/dns/.gitignore",
+        "sha256": "d7b01a50eb32f84028c321957eec2b82e83d583fecd0d9a6ea18f77086d93070",
+        "size": 24
+      },
+      {
+        "kind": "file",
+        "path": "github.com/mitchellh/go-ps/.gitignore",
+        "sha256": "d97c263d44a33954979f9582146bf8d4cc1d9bf9959a9059aeb58afd01bebaea",
+        "size": 10
+      },
+      {
+        "kind": "file",
+        "path": "github.com/openai/openai-go/v3/.gitignore",
+        "sha256": "7b4014f24344b391082b1c469d6b582c304207b5f27dfe91b0f87001c63fcf4b",
+        "size": 49
+      },
+      {
+        "kind": "file",
+        "path": "github.com/oschwald/maxminddb-golang/.gitignore",
+        "sha256": "23b7a7ea6eb5209f67453fa6c5c67a13c00c037175d793efc7df2bcf64e2c104",
+        "size": 27
+      },
+      {
+        "kind": "file",
+        "path": "github.com/oschwald/maxminddb-golang/.gitmodules",
+        "sha256": "712439aa14a3dabc22c81f63f2206c3575d108bbedfe027e1489d4cae270520e",
+        "size": 91
+      },
+      {
+        "kind": "file",
+        "path": "github.com/pierrec/lz4/v4/.gitignore",
+        "sha256": "325c89c8688dbf8af7cf36ed064fe9aef9f6f0507d15ccdc9d817dfc5e36d6ad",
+        "size": 530
+      },
+      {
+        "kind": "file",
+        "path": "github.com/pion/dtls/v3/.gitignore",
+        "sha256": "011a100136bf0bba1c4a4b7816bc12bf418b39ef0adbc896ca1333a35fc4254e",
+        "size": 410
+      },
+      {
+        "kind": "file",
+        "path": "github.com/pion/logging/.gitignore",
+        "sha256": "26c8d940512f913ec054898bb41bfd1881612fb1eeafc5c224406b622528a560",
+        "size": 410
+      },
+      {
+        "kind": "file",
+        "path": "github.com/pires/go-proxyproto/.gitignore",
+        "sha256": "30a5fa66b97f9b4902a40be9797666c5fa1e67d8aae42319c7acd1bd1095230b",
+        "size": 111
+      },
+      {
+        "kind": "file",
+        "path": "github.com/pkg/sftp/.gitignore",
+        "sha256": "a4385e1f49654b27182544131b4c863b3576195a07511de5dc5881d01d59cbcd",
+        "size": 123
+      },
+      {
+        "kind": "file",
+        "path": "github.com/quic-go/qpack/.gitignore",
+        "sha256": "611d0ede81d13c062275952964c6e2c7ba1f18542c46247639f33742f039bbd3",
+        "size": 110
+      },
+      {
+        "kind": "file",
+        "path": "github.com/quic-go/qpack/.gitmodules",
+        "sha256": "275c61ce7591bcea2c35e6d0d9ecfa92402ac6256b5fcfa165df5ca2ffe4e546",
+        "size": 92
+      },
+      {
+        "kind": "file",
+        "path": "github.com/safchain/ethtool/.gitignore",
+        "sha256": "e130fef5cc25d3ae99ba720506774fbeef790ed3e7268f24f663579d4b0f3bef",
+        "size": 320
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/bbolt/.gitattributes",
+        "sha256": "3e75595a341712a285300dc684dbec122835c39998224e870d643c58d9f22280",
+        "size": 206
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/bbolt/.gitignore",
+        "sha256": "40cc341bb207a689b132210f5995980a8d8a38cc5f638477894df1bf039bed16",
+        "size": 96
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/cors/.gitignore",
+        "sha256": "73b134205f4ed9e6350d789d3d067ea1a936ae377c04a1d47aab76a83065278f",
+        "size": 27
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/cronet-go/.gitignore",
+        "sha256": "d72cee5dff77b40c8002bd7cb46c84e64a29a9501c4a1b4ca3d10709d4618634",
+        "size": 186
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/cronet-go/.gitmodules",
+        "sha256": "66cbd75e4526d7209b25aea89d836e776fe9afcde486d5d036ad0eadf6f60f6a",
+        "size": 114
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/fswatch/.gitignore",
+        "sha256": "73b134205f4ed9e6350d789d3d067ea1a936ae377c04a1d47aab76a83065278f",
+        "size": 27
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/gomobile/.gitattributes",
+        "sha256": "f01a52100b87112941cedcd5cd60a7146c104fc7971c3efa3f13ea0d3fd3d725",
+        "size": 345
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/gomobile/.gitignore",
+        "sha256": "5f3de5031abe8212c0bc8870235916a2db9b39175c872c44e92aa7573838a855",
+        "size": 505
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/netlink/.gitignore",
+        "sha256": "0a44bd2b8e7c35cfad385b8f440c3ec6ebcf8bd10248cf5925d2ceacc92f8078",
+        "size": 7
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/nftables/.gitignore",
+        "sha256": "69196bd06e94c48493f5e12efd6837d4f432703054250b74b6296fdc462ea541",
+        "size": 18
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/quic-go/.gitignore",
+        "sha256": "ba01b874e8df4c857007932ca28173eed0769ee877cb03b1dedfd41ca8943565",
+        "size": 256
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-anytls/.gitignore",
+        "sha256": "2cfaf9fde7a45b714dcd368b2645afb6e290591e36c6dbce4bbaf72afb753b47",
+        "size": 58
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-cloudflared/.gitignore",
+        "sha256": "ae739f38b4e74468633c3709d9ffd2f003acc0aeac5da5ca52d0c5a32afae437",
+        "size": 48
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-mux/.gitignore",
+        "sha256": "73b134205f4ed9e6350d789d3d067ea1a936ae377c04a1d47aab76a83065278f",
+        "size": 27
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-openconnect/.gitignore",
+        "sha256": "2cfaf9fde7a45b714dcd368b2645afb6e290591e36c6dbce4bbaf72afb753b47",
+        "size": 58
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-openvpn/.gitignore",
+        "sha256": "2cfaf9fde7a45b714dcd368b2645afb6e290591e36c6dbce4bbaf72afb753b47",
+        "size": 58
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-quic/.gitignore",
+        "sha256": "058c16cad197cec0c6874b2027e2ffa286fa8ec8d6259536bae775918e0a925c",
+        "size": 47
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-shadowsocks/.gitignore",
+        "sha256": "619a754b37b7bf159791d2f3af67800e2654d2c211a4706842604b0cbbf15a48",
+        "size": 17
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-shadowsocks2/.gitignore",
+        "sha256": "619a754b37b7bf159791d2f3af67800e2654d2c211a4706842604b0cbbf15a48",
+        "size": 17
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-shadowtls/.gitignore",
+        "sha256": "619a754b37b7bf159791d2f3af67800e2654d2c211a4706842604b0cbbf15a48",
+        "size": 17
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-snell/.gitignore",
+        "sha256": "21b8f95393168751e88c2b897ef7bc47e7e340f160d43b360d091e44fe536eb9",
+        "size": 68
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-tun/.gitignore",
+        "sha256": "fec91a027292261d57e7ba002fa1237f3c7c78e67f76d2c7772fba482991a924",
+        "size": 74
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-usbip/.gitattributes",
+        "sha256": "9f6064e4f5f3d05ed69621a55eb507c7079c76b075c986dff6fcade84895a2a7",
+        "size": 68
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-usbip/.gitignore",
+        "sha256": "bbf841b7e6d297eac6553a890e95a639ea7ffb69c73353deede83cb3bb8beb8f",
+        "size": 82
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/sing-vmess/.gitignore",
+        "sha256": "619a754b37b7bf159791d2f3af67800e2654d2c211a4706842604b0cbbf15a48",
+        "size": 17
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/smux/.gitignore",
+        "sha256": "d351bc4532d30c1eb2d3982ac78ff97d11bd4948ca4cececc4f3b2079638eed3",
+        "size": 284
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/tailscale/.gitattributes",
+        "sha256": "d0e00f848993bec585f75b84aa4f583fc92155a4587f5616fb2040280b46606c",
+        "size": 1189
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/tailscale/.gitignore",
+        "sha256": "d7e115fdb58eb567012908de642cabae7055c24c3b35b91945d029a578973f6d",
+        "size": 1079
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/tailscale/logtail/.gitignore",
+        "sha256": "bb1d26cf210c18ac943f3cd61f3225d48bfd282f0af2e6c2b7c5fd299d9887bb",
+        "size": 105
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/tailscale/version/.gitignore",
+        "sha256": "8ca33c3c43395e676ac94c2a25d07963bf4627c75377123324dde25c8333d2c9",
+        "size": 123
+      },
+      {
+        "kind": "file",
+        "path": "github.com/sagernet/ws/.gitignore",
+        "sha256": "02c02fcf3e6341da39e98e48bb35239314a4d5361a877f4ba9ad285abf1ddd71",
+        "size": 38
+      },
+      {
+        "kind": "file",
+        "path": "github.com/smallstep/pkcs7/.gitignore",
+        "sha256": "ab6bc3a5d629200c7ca4fd5c2b5e7684c0ad53c46ffd50d4facad61a32c4c8a4",
+        "size": 300
+      },
+      {
+        "kind": "file",
+        "path": "github.com/spf13/cobra/.gitignore",
+        "sha256": "b425af3b2f46b3a3ea6b788d28be4530e7e43631bf04aac0cfb892558337ef7d",
+        "size": 484
+      },
+      {
+        "kind": "file",
+        "path": "github.com/spf13/pflag/.gitignore",
+        "sha256": "133d80c9f9f684527d519477093b36b41936b091fe55011c1e701a9277864e36",
+        "size": 9
+      },
+      {
+        "kind": "file",
+        "path": "github.com/tailscale/go-winio/.gitattributes",
+        "sha256": "f70d755466b101646b043fe3c62c4f8a39eae827c1a2a303a2d39ccd93f534f8",
+        "size": 18
+      },
+      {
+        "kind": "file",
+        "path": "github.com/tailscale/go-winio/.gitignore",
+        "sha256": "c6834ab5bda92e20e92e52599c953cd9d87a2fd54482d1ce27f73f53f8b9eb99",
+        "size": 73
+      },
+      {
+        "kind": "file",
+        "path": "github.com/tailscale/netlink/.gitignore",
+        "sha256": "0a44bd2b8e7c35cfad385b8f440c3ec6ebcf8bd10248cf5925d2ceacc92f8078",
+        "size": 7
+      },
+      {
+        "kind": "file",
+        "path": "github.com/tailscale/web-client-prebuilt/.gitignore",
+        "sha256": "3cb44e3534ff1e0c7ff632c1be4d7ab8fd50c926788bde51f30f4b0f45520075",
+        "size": 4
+      },
+      {
+        "kind": "file",
+        "path": "github.com/vishvananda/netlink/.gitignore",
+        "sha256": "dae42fa54ecb19c7657aeecf76ee1ab2c182c4748d0867d39e1f03f0096b8aad",
+        "size": 16
+      },
+      {
+        "kind": "file",
+        "path": "github.com/youmark/pkcs8/.gitignore",
+        "sha256": "4a8ce32bda0c1d55fe16d8a4544ca045456151f63d8f2b5dddb3fad848e288ec",
+        "size": 259
+      },
+      {
+        "kind": "file",
+        "path": "github.com/zeebo/blake3/.gitignore",
+        "sha256": "e8b1ccff3e2ce28b3c03845ee36b77a84915d6f799b3954449ee7524811ec99d",
+        "size": 47
+      },
+      {
+        "kind": "file",
+        "path": "go.uber.org/multierr/.gitignore",
+        "sha256": "492a4dbf1a4b037903109b5f7dcd02b3d9bcdf29b7037ffbd836d0e72be9570d",
+        "size": 34
+      },
+      {
+        "kind": "file",
+        "path": "go.uber.org/zap/.gitignore",
+        "sha256": "e71f4c185b639a08a914350027e566c787a76d80cf45d7881f9315a48cf23393",
+        "size": 320
+      },
+      {
+        "kind": "file",
+        "path": "go4.org/netipx/.gitignore",
+        "sha256": "84a3173353b4a9ac7eb304ec9317478fe1c300f4c783bed507411237826597bb",
+        "size": 39
+      },
+      {
+        "kind": "file",
+        "path": "go4.org/netipx/.gitmodules",
+        "sha256": "adb7f08384a03d57866aba4a8e28ce2f68ca8576d6cac118166980dd31ae0173",
+        "size": 88
+      },
+      {
+        "kind": "file",
+        "path": "golang.org/x/net/http2/.gitignore",
+        "sha256": "a72adf98822b3f9f99b5781137976efb8de250ebbfbcfc7a8851a6822553d234",
+        "size": 11
+      },
+      {
+        "kind": "file",
+        "path": "golang.org/x/sys/unix/.gitignore",
+        "sha256": "cc0a4a6efa79e7f971f329717482d436e7f02657d0409c07fb476d698eee8d11",
+        "size": 16
+      },
+      {
+        "kind": "file",
+        "path": "howett.net/plist/.gitignore",
+        "sha256": "05b785f505cacf4b2d18e691e5efcfc38e63d9e4c6949df2215ce791f65242f5",
+        "size": 276
+      },
+      {
+        "kind": "file",
+        "path": "zombiezen.com/go/capnproto2/.gitignore",
+        "sha256": "fda7f8277edd88ea7b548149f5d346091276605073d4f81d48363ec408a9f06d",
+        "size": 154
+      }
+    ],
+    "format": "go-mod-vendor",
+    "modules_txt_sha256": "10801d64d7248b9d50af7a9501619adb5ab887087d21445fe06b0ef40262898c",
+    "path": "vendor",
+    "tree_sha256": "70b44cefdcbff3f042af1b93c3f63b932194f7820e7e1a52163cf06976e8d6d6"
+  },
+  "schema_version": "sing-box-vendor-lock/v2"
+}
