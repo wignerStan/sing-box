@@ -106,10 +106,10 @@ func TestSystemExitRouteFacilityLifecycleIsIdempotent(t *testing.T) {
 		func() bool { return true },
 		func() (bool, netip.Addr, netip.Addr) { return false, netip.Addr{}, netip.Addr{} },
 	)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		facility.Start()
 		facility.Start()
-		for j := 0; j < 8; j++ {
+		for range 8 {
 			facility.Request()
 		}
 		facility.Stop()
@@ -233,7 +233,7 @@ func TestSystemExitRouteFacilityConcurrentStartStop(t *testing.T) {
 		func() (bool, netip.Addr, netip.Addr) { return false, netip.Addr{}, netip.Addr{} },
 	)
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
