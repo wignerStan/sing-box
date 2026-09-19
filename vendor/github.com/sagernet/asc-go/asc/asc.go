@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -335,12 +336,45 @@ func (c *Client) newRequest(ctx context.Context, method string, path string, bod
 	return req, nil
 }
 
+// maxServerErrorRetries bounds the retries of a 500 response. Without a bound a persistently
+// failing endpoint is hammered in a tight loop.
+const maxServerErrorRetries = 3
+
 func (c *Client) do(ctx context.Context, req *http.Request, v interface{}) (*Response, error) {
 	resp, err := c.do0(ctx, req, v)
-	for resp != nil && resp.StatusCode == http.StatusInternalServerError {
-		resp, err = c.do0(ctx, req, v)
+	for attempt := 1; attempt <= maxServerErrorRetries; attempt++ {
+		if resp == nil || resp.StatusCode != http.StatusInternalServerError {
+			break
+		}
+		// The body of req has already been consumed, so it has to be rewound before the
+		// request can be sent a second time.
+		retryReq, rewindErr := rewindRequest(req)
+		if rewindErr != nil {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt) * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return resp, ctx.Err()
+		case <-timer.C:
+		}
+		resp, err = c.do0(ctx, retryReq, v)
 	}
 	return resp, err
+}
+
+func rewindRequest(req *http.Request) (*http.Request, error) {
+	if req.GetBody == nil {
+		return req, nil
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, err
+	}
+	retryReq := req.Clone(req.Context())
+	retryReq.Body = body
+	return retryReq, nil
 }
 
 func (c *Client) do0(ctx context.Context, req *http.Request, v interface{}) (*Response, error) {
@@ -381,7 +415,20 @@ func (c *Client) do0(ctx context.Context, req *http.Request, v interface{}) (*Re
 
 	err := backoff.RetryNotify(op, backoff.NewExponentialBackOff(), notify)
 
-	resp := <-respCh
+	// op only publishes a response when the request succeeded; on a transport failure or an
+	// expired context it returns without sending, so this must not block waiting for one.
+	var resp *http.Response
+	select {
+	case resp = <-respCh:
+	default:
+	}
+
+	if resp == nil {
+		if err == nil {
+			err = errors.New("asc: request produced neither a response nor an error")
+		}
+		return nil, err
+	}
 
 	defer closeDesc(resp.Body)
 

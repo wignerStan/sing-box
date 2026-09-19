@@ -142,6 +142,44 @@ def source_initialized(path: Path) -> bool:
     return (path / ".git").exists()
 
 
+
+def verify_relationships(value: dict[str, Any]) -> None:
+    """Keep authored ownership declarations aligned with the generated lock."""
+    for component in value.get("components", []):
+        name = component.get("name")
+        expected = EXPECTED_COMPONENTS.get(name)
+        if expected is None:
+            raise RuntimeError(f"unexpected vendor component: {name!r}")
+        path = ROOT / "deps/source-relationships" / f"{name}.json"
+        relationship = json.loads(path.read_text(encoding="utf-8"))
+        source = relationship.get("source", {})
+        if (
+            relationship.get("schema_version") != "sing-box-patched-source/v1"
+            or relationship.get("kind") != "patched_third_party"
+            or relationship.get("name") != name
+            or relationship.get("public_api") != expected["module"]
+            or relationship.get("materialization") != f"vendor/{expected['module']}"
+            or source.get("path") != component.get("source", {}).get("path")
+            or source.get("commit") != component.get("source", {}).get("commit")
+        ):
+            raise RuntimeError(f"source relationship differs from vendor lock: {name}")
+        series_path = ROOT / safe_relative_path(relationship.get("series"))
+        series = [line.strip() for line in series_path.read_text().splitlines()
+                  if line.strip() and not line.lstrip().startswith("#")]
+        expected_patches = [str((series_path.parent / item).relative_to(ROOT)) for item in series]
+        if expected_patches != [item.get("path") for item in component.get("patches", [])]:
+            raise RuntimeError(f"source relationship patch order differs from vendor lock: {name}")
+        # The public remote remains explicit even in a git archive, where the
+        # submodule repository itself is intentionally absent.
+        configured_url = re.search(
+            rf'(?ms)^\[submodule "{re.escape(expected["source"])}"\]\s*\n'
+            rf'(?:(?!^\[).)*?^\s*url\s*=\s*(\S+)',
+            (ROOT / ".gitmodules").read_text(),
+        )
+        if configured_url is None or source.get("url") != configured_url.group(1):
+            raise RuntimeError(f"source relationship remote differs from .gitmodules: {name}")
+
+
 def verify_projection(value: dict[str, Any]) -> None:
     if not (VENDOR / "modules.txt").is_file():
         raise RuntimeError("vendor/modules.txt is missing")
@@ -258,6 +296,7 @@ def main() -> None:
     if value.get("authority") != "wignerStan/sing-box":
         raise RuntimeError("unexpected vendor authority")
 
+    verify_relationships(value)
     verify_projection(value)
     verify_go_contract()
     source_verified = verify_sources(value, require_source=options.require_source)

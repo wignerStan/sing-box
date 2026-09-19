@@ -14,10 +14,14 @@ const (
 )
 
 type CaptureConfig struct {
-	TProxyPort                uint16
-	LANInterfaces             []string
-	WANInterfaces             []string
-	OutputMark                uint32
+	TProxyPort    uint16
+	LANInterfaces []string
+	WANInterfaces []string
+	OutputMark    uint32
+	// BypassMark/BypassMarkMask exempt matching kernel packets without changing
+	// their original mark. Both zero disables the exemption.
+	BypassMark                uint32
+	BypassMarkMask            uint32
 	AutoConfigureKernel       bool
 	ConnectionStateMapEntries uint32
 	RequireProcessMetadata    bool
@@ -45,6 +49,12 @@ func (c CaptureConfig) Validate() error {
 	}
 	if c.ConnectionStateMapEntries < 1024 {
 		return fmt.Errorf("connection-state map size %d is too small", c.ConnectionStateMapEntries)
+	}
+	if (c.BypassMark == 0) != (c.BypassMarkMask == 0) {
+		return errors.New("bypass mark and mask must both be non-zero or both disabled")
+	}
+	if c.BypassMark & ^c.BypassMarkMask != 0 {
+		return errors.New("bypass mark contains bits outside its mask")
 	}
 	return nil
 }

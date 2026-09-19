@@ -6,7 +6,7 @@ permissions:
   contents: write
 env:
   RELEASE_TAG: v1.14.0-wigner.1
-  PRODUCT_TAGS: with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
+  PRODUCT_TAGS: with_dae,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
 jobs:
   product:
     strategy:

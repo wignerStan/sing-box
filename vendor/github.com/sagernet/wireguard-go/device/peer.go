@@ -45,7 +45,6 @@ type Peer struct {
 		sync.Mutex
 		val            conn.Endpoint
 		candidates     []conn.Endpoint
-		resolver       func() ([]conn.Endpoint, error)
 		clearSrcOnTx   bool // signal to val.ClearSrc() prior to next packet transmission
 		disableRoaming bool
 	}
@@ -160,6 +159,14 @@ func (p *Peer) SetAllowedIPs(allowedIPs []netip.Prefix) {
 	p.state.testAllowedIP.Store(&f)
 }
 
+// SetPresharedKey sets the optional WireGuard pre-shared key for this peer.
+// The zero value disables the pre-shared-key layer.
+func (p *Peer) SetPresharedKey(psk NoisePresharedKey) {
+	p.handshake.mutex.Lock()
+	defer p.handshake.mutex.Unlock()
+	p.handshake.presharedKey = psk
+}
+
 // SendBuffers sends buffers to peer. WireGuard packet data in each element of
 // buffers must be preceded by MessageEncapsulatingTransportSize number of
 // bytes.
@@ -190,6 +197,8 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 			totalLen += uint64(len(b))
 		}
 		peer.txBytes.Add(totalLen)
+	} else if errors.Is(err, conn.ErrRebindRequired) {
+		peer.device.scheduleBindUpdate()
 	}
 	return err
 }
@@ -403,26 +412,12 @@ func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
 	peer.endpoint.val = endpoint
 }
 
-// SetEndpointResolver sets a function providing the candidate endpoints for
-// this peer. It is invoked on every handshake initiation, and the initiation
-// is sent to the current endpoint and every candidate; the source of the
-// first valid reply becomes the current endpoint via roaming. When the
-// resolver fails, the candidates from its last successful invocation are
-// reused.
-func (peer *Peer) SetEndpointResolver(resolver func() ([]conn.Endpoint, error)) {
-	peer.endpoint.Lock()
-	defer peer.endpoint.Unlock()
-	peer.endpoint.resolver = resolver
-}
-
 func (peer *Peer) resolveEndpoints() []conn.Endpoint {
-	peer.endpoint.Lock()
-	resolver := peer.endpoint.resolver
-	peer.endpoint.Unlock()
+	resolver := peer.device.endpointResolverFn.Load()
 	if resolver == nil {
 		return nil
 	}
-	resolved, err := resolver()
+	resolved, err := (*resolver)(peer.handshake.remoteStatic)
 	peer.endpoint.Lock()
 	defer peer.endpoint.Unlock()
 	if err != nil {

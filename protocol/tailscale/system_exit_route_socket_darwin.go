@@ -1,4 +1,4 @@
-//go:build with_gvisor && darwin
+//go:build with_tailscale && darwin
 
 package tailscale
 

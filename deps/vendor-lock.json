@@ -18,9 +18,14 @@
           "order": 2,
           "path": "patches/dae/0002-namespace-identity.patch",
           "sha256": "aebac8f61464fbbea8aaa21e0d38e7b27796e6b402d64040d9bae8c15bed512b"
+        },
+        {
+          "order": 3,
+          "path": "patches/dae/0003-kernel-mark-bypass.patch",
+          "sha256": "806b237d218c868b643befe38684e51ccfc82412403afbc232c4ba7b16197401"
         }
       ],
-      "result_tree": "5db9c18ac05342ff422f034e702fb4b8d56f8bc4",
+      "result_tree": "59322aae277ba2d3ae2766ee3d090ac436e3d0c0",
       "source": {
         "commit": "5db27a0028d36e7847bd3796497df952337a20e2",
         "path": "third_party/dae"
@@ -37,7 +42,7 @@
         {
           "order": 1,
           "path": "patches/tailscale/0001-pure-system-dataplane.patch",
-          "sha256": "f48dec6a37ccc27347785a037a9042d4e4563efa52d74ecd0a67972b65db710f"
+          "sha256": "184c02cb63561b3ee5950b2e219a17c128f1150215f0481c6397d77b53f1827a"
         },
         {
           "order": 2,
@@ -45,15 +50,15 @@
           "sha256": "f1ac39a3870ce2545c435aaff0b7c7d1e2e3f5aadb697bf793b24b072010914a"
         }
       ],
-      "result_tree": "619a2708320b0b1bdc8460a3eea9160785b31c77",
+      "result_tree": "b827a625a6d9119f69337876375a13f55b61f6eb",
       "source": {
-        "commit": "c8e28eeffe16a390ae8e320500175de6207f521f",
+        "commit": "a8fbeb4b0838c69e383e52b08228366f855d2261",
         "path": "third_party/tailscale"
       }
     }
   ],
   "projection": {
-    "entries": 8976,
+    "entries": 9026,
     "excluded_repository_metadata": [
       {
         "kind": "file",
@@ -639,9 +644,9 @@
       }
     ],
     "format": "go-mod-vendor",
-    "modules_txt_sha256": "10801d64d7248b9d50af7a9501619adb5ab887087d21445fe06b0ef40262898c",
+    "modules_txt_sha256": "8f6d4d44cdefa35160a24a3341f2ef2b97ad9d9d3f5d97f8b7930fe03b9a14f2",
     "path": "vendor",
-    "tree_sha256": "70b44cefdcbff3f042af1b93c3f63b932194f7820e7e1a52163cf06976e8d6d6"
+    "tree_sha256": "db69c961005e25941e9002a71f339e724f30e32e5181a939a59053ecaf6a7da0"
   },
   "schema_version": "sing-box-vendor-lock/v2"
 }

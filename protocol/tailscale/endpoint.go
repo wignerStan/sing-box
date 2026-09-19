@@ -133,13 +133,12 @@ type Endpoint struct {
 	// Tailscale's WireGuard engine owns this adapter after it is assigned to
 	// server.Tun. Keep the adapter for idempotent cleanup; closing the raw
 	// sing-tun device after Server.Close would close it a second time.
-	systemTunDevice   wgTun.Device
-	systemDialer      *dialer.DefaultDialer
-	systemRoutes      *systemExitRouteFacility
-	exitNodeUpdateMu  sync.Mutex
-	processHooks      *processHookLease
-	userspaceHandler  tun.Handler
-	fallbackTCPCloser func()
+	systemTunDevice  wgTun.Device
+	systemDialer     *dialer.DefaultDialer
+	systemRoutes     *systemExitRouteFacility
+	exitNodeUpdateMu sync.Mutex
+	processHooks     *processHookLease
+	userspaceHandler tun.Handler
 }
 
 func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TailscaleEndpointOptions) (adapter.Endpoint, error) {
@@ -706,10 +705,6 @@ func (t *Endpoint) Close() error {
 		err = E.Errors(err, common.Close(common.PtrOrNil(t.server)))
 	}
 	t.releaseProcessHooks()
-	if t.fallbackTCPCloser != nil {
-		t.fallbackTCPCloser()
-		t.fallbackTCPCloser = nil
-	}
 	if t.systemTunDevice != nil {
 		// Server.Close normally closes this first through wgengine. The
 		// adapter owns the raw TUN and makes this second cleanup harmless.
