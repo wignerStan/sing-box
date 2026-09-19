@@ -43,3 +43,17 @@ func TestDeclaredOutputMarkRejectsExplicitMarksBeforeRuntime(t *testing.T) {
 		})
 	}
 }
+
+func TestDeclaredOutputMarkRejectsDetourMark(t *testing.T) {
+	ctx := dialer.ContextWithExclusiveOutputMark(context.Background(), "dae")
+	_, err := dialer.NewWithOptions(dialer.Options{
+		Context: ctx,
+		Options: option.DialerOptions{
+			Detour:                "direct",
+			AbstractDialerOptions: option.AbstractDialerOptions{RoutingMark: 0x100},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "routing_mark conflicts with dae automatic output mark") {
+		t.Fatalf("detour construction error = %v", err)
+	}
+}
