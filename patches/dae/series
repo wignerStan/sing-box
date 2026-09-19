@@ -1,3 +1,4 @@
 0001-ebpfinbound-runtime.patch
 0002-namespace-identity.patch
 0003-kernel-mark-bypass.patch
+0004-authoritative-output-mark.patch

@@ -39,6 +39,18 @@ its original socket identity. Both-zero defaults preserve existing behavior;
 changing the exemption requires a process restart. The patch carries generated
 BPF bytes and tests for both marked bypass and unmarked capture.
 
+`0004-authoritative-output-mark.patch` fixes a separate existing feedback-loop
+bug: a known socket-cookie PID could reject a packet before the provider's own
+output-mark exemption ran. Cookie PIDs belong to the initial PID namespace, and
+marked sockets can also belong to a different process. The capture-only early
+check now treats the configured nonzero output mark as authoritative. A
+controlled different-process `SO_MARK=0x1ee0` echo, with no userspace capture
+reader, failed before the fix and passes afterward for TCP/UDP over IPv4/IPv6.
+The privileged checks also verify that marks are unchanged in all eight TC
+hooks, while unmarked traffic is still captured. The original standalone DAE
+compilation path is unchanged. Product integration diagnostics now include the
+child logs even when it has already exited before a shutdown signal.
+
 `deps/source-relationships`, the ordered patch inventories, and the generated
 vendor lock define the dependency identities. The verifier now checks the
 relationship declarations against the lock, series order, projection paths,
