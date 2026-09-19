@@ -113,6 +113,8 @@ func loadCaptureBPF(ns *captureNetNS, config CaptureConfig) (*captureObjects, er
 		UseRedirectPeer:      0,
 		HasBpfGetCurrentTask: hasCurrentTask,
 		DaeSocketMark:        config.OutputMark,
+		BypassMark:           config.BypassMark,
+		BypassMarkMask:       config.BypassMarkMask,
 	}
 	variable, exists := spec.Variables["PARAM"]
 	if !exists || variable == nil {

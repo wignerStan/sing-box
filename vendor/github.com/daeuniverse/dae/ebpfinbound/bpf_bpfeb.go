@@ -49,6 +49,8 @@ type bpfDaeParam struct {
 	HasBpfGetCurrentTask uint8
 	Padding2             uint16
 	DaeSocketMark        uint32
+	BypassMark           uint32
+	BypassMarkMask       uint32
 }
 
 type bpfRoutingHandoffEntry struct {

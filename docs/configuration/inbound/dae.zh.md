@@ -51,6 +51,16 @@ Linux TC/cgroup eBPF -> 透明 TCP/UDP 监听器 -> sing-box 路由 -> sing-box 
 
 应用于 sing-box DNS、出站和透明 UDP 回复套接字的标记，防止流量被重复捕获。默认值为 `0x100`。`dae` 不能与另一个自动重定向捕获所有者同时使用，例如启用了 `auto_redirect` 的 TUN 入站。
 
+#### bypass_mark / bypass_mark_mask
+
+可选的内核捕获豁免。掩码非零且 `(packet_mark & bypass_mark_mask) == bypass_mark`
+时，数据包保留原始标记并继续走内核网络路径。两个字段默认为零，表示禁用。
+标记必须非零，且不得包含掩码之外的位。
+
+独立 Tailscale 的传输流量可使用 `"bypass_mark": "0x80000"` 和
+`"bypass_mark_mask": "0xff0000"`，以保留套接字身份和策略路由。
+用户态 `direct` 出站不能替代此内核旁路。更改任一字段都需要重启 sing-box。
+
 #### auto_config_kernel_parameter
 
 允许模块临时设置所选拓扑需要的转发和接口 sysctl，并在关闭时恢复原值。

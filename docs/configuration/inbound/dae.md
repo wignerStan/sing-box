@@ -51,6 +51,18 @@ Private transparent listener port. The default is `12345`.
 
 Mark applied to sing-box DNS, outbound, and transparent UDP reply sockets so their traffic is not captured again. The default is `0x100`. A `dae` inbound cannot coexist with another automatic capture owner, such as a TUN inbound with `auto_redirect`.
 
+#### bypass_mark and bypass_mark_mask
+
+Optional kernel capture exemption for an existing network owner. With a nonzero
+mask, packets for which `(packet_mark & bypass_mark_mask) == bypass_mark` remain
+on the kernel path with their original mark. Both fields default to zero, which
+disables this exemption. The mark must be nonzero and contain only masked bits.
+
+For standalone Tailscale transport, use `"bypass_mark": "0x80000"` and
+`"bypass_mark_mask": "0xff0000"`. This preserves Tailscale's socket identity and
+policy routing. A userspace `direct` outbound does not provide that behavior.
+Changing either field requires restarting sing-box.
+
 #### auto_config_kernel_parameter
 
 Allow the provider to lease and restore the forwarding and per-interface sysctls required by the selected topology.
@@ -69,7 +81,7 @@ See [UDP NAT fields](/configuration/shared/udp-nat/).
 
 ### Lifecycle and reload
 
-The provider owns one listener set and sing-box owns one set of accept loops. Replacing an inbound with the same tag and identical capture settings switches the active sing-box handler without cloning sockets or starting a second eBPF dataplane. A second tag is rejected. Changing interfaces, port, mark, kernel configuration, metadata requirements, or map size requires a process restart.
+The provider owns one listener set and sing-box owns one set of accept loops. Replacing an inbound with the same tag and identical capture settings switches the active sing-box handler without cloning sockets or starting a second eBPF dataplane. A second tag is rejected. Changing interfaces, port, output or bypass marks, kernel configuration, metadata requirements, or map size requires a process restart.
 
 If sing-box terminates without closing the provider, the next start refuses to delete ambiguous host state. After confirming no old sing-box process is active, recover with:
 
@@ -90,4 +102,4 @@ CGO_ENABLED=0 go build -tags "with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
 
 The Naive outbound in `DEFAULT_BUILD_TAGS` requires the Chromium toolchain prepared by sing-box's release workflow; add `with_dae` to that workflow's tags when building the Naive variant.
 
-Until the standalone provider is merged or tagged upstream, this fork pins the canonical provider module through a `replace` directive to `wignerStan/dae`.
+The provider is generated from the pristine `third_party/dae` pin plus the ordered parent-owned `patches/dae` series. Build from the verified Go vendor projection; see [Vendor authority](/VENDOR_AUTHORITY/).

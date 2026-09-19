@@ -1,6 +1,6 @@
 {
   "kind": "patched_third_party",
-  "materialization": "vendor/dae/ebpfinbound",
+  "materialization": "vendor/github.com/daeuniverse/dae/ebpfinbound",
   "name": "dae-ebpfinbound",
   "public_api": "github.com/daeuniverse/dae/ebpfinbound",
   "schema_version": "sing-box-patched-source/v1",

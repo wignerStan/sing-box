@@ -7,6 +7,8 @@ type DAEInboundOptions struct {
 	LANInterface           []string         `json:"lan_interface,omitempty"`
 	WANInterface           []string         `json:"wan_interface,omitempty"`
 	OutputMark             FwMark           `json:"output_mark,omitempty"`
+	BypassMark             FwMark           `json:"bypass_mark,omitempty"`
+	BypassMarkMask         FwMark           `json:"bypass_mark_mask,omitempty"`
 	AutoConfigureKernel    bool             `json:"auto_config_kernel_parameter,omitempty"`
 	RequireProcessMetadata bool             `json:"require_process_metadata,omitempty"`
 	BPFConnStateMapSize    uint32           `json:"bpf_conn_state_map_size,omitempty"`

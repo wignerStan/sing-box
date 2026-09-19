@@ -1,4 +1,4 @@
-//go:build with_gvisor
+//go:build with_tailscale
 
 package tailscale
 
@@ -7,7 +7,6 @@ import (
 
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/tailscale/net/netmon"
-	"github.com/sagernet/tailscale/net/netns"
 )
 
 var tailscaleProcessHookRegistry struct {
@@ -16,7 +15,7 @@ var tailscaleProcessHookRegistry struct {
 }
 
 // processHookLease gives one endpoint explicit ownership of Tailscale's
-// process-global network hooks. Releasing a stale or foreign lease cannot
+// process-global interface discovery hooks. Releasing a stale or foreign lease cannot
 // clear hooks installed by the current owner.
 type processHookLease struct {
 	owner          *Endpoint
@@ -31,7 +30,7 @@ func acquireProcessHookLease(owner *Endpoint) (*processHookLease, error) {
 	tailscaleProcessHookRegistry.Lock()
 	defer tailscaleProcessHookRegistry.Unlock()
 	if current := tailscaleProcessHookRegistry.lease; current != nil && !current.released {
-		return nil, E.New("only one Tailscale endpoint can be active per sing-box process while Tailscale socket hooks are process-global")
+		return nil, E.New("only one Tailscale endpoint can be active per sing-box process while Tailscale interface discovery hooks are process-global")
 	}
 	lease := &processHookLease{owner: owner}
 	tailscaleProcessHookRegistry.lease = lease
@@ -71,8 +70,6 @@ func (l *processHookLease) Release() {
 		netmon.SetTailscaleInterfaceProps("", 0)
 	}
 	netmon.RegisterInterfaceGetter(nil)
-	netns.SetControlFunc(nil)
-	netns.SetListenPacketFunc(nil)
 	tailscaleProcessHookRegistry.lease = nil
 }
 

@@ -70,3 +70,17 @@ sudo env PATH="$PATH" go test -tags=integration \
 ```
 
 Run the privileged test only on a disposable Linux machine or VM. The test restores leased sysctls and removes its temporary namespaces, links, filters and qdiscs before it exits.
+# Kernel mark exemptions
+
+`CaptureConfig.BypassMark` and `BypassMarkMask` optionally preserve traffic that
+already has a host routing mark. Both zero disables this exemption. Otherwise,
+both must be nonzero and the mark must not contain bits outside the mask.
+Each LAN/WAN ingress/egress program returns `TC_ACT_PIPE` before parsing or
+capturing a packet when `(skb->mark & BypassMarkMask) == BypassMark`. It does
+not change the packet mark, route it through userspace, or skip later TC filters.
+For example, a host retaining standalone Tailscale can configure mark `0x80000`
+and mask `0xff0000`, leaving its existing policy-routing behavior intact.
+
+Privileged tests exercise the generated programs in all eight directions and
+real IPv4/IPv6 TCP/UDP round trips from separately marked processes. Run these
+tests in a disposable network and cgroup namespace, never on a production router.

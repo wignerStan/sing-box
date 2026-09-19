@@ -48,14 +48,41 @@ type BetaTester struct {
 	Type          string                   `json:"type"`
 }
 
+// BetaTesterState defines the tester's progress through an invitation. It is only populated when
+// the query is scoped to an app, either with filter[apps] or through a beta group; reading a
+// betaTesters resource by ID alone leaves it null.
+type BetaTesterState string
+
+const (
+	// BetaTesterStateInvited is set while the invitation has not been redeemed.
+	BetaTesterStateInvited BetaTesterState = "INVITED"
+	// BetaTesterStateAccepted is set once the invitation has been redeemed.
+	BetaTesterStateAccepted BetaTesterState = "ACCEPTED"
+	// BetaTesterStateInstalled is set once a build has been installed.
+	BetaTesterStateInstalled BetaTesterState = "INSTALLED"
+	// BetaTesterStateRevoked is set once the tester's access has been withdrawn.
+	BetaTesterStateRevoked BetaTesterState = "REVOKED"
+)
+
+// BetaTesterAppDevice describes one device the tester installed a build on. Like BetaTesterState
+// it is only populated for app-scoped queries.
+type BetaTesterAppDevice struct {
+	AppBuildVersion *string   `json:"appBuildVersion,omitempty"`
+	Model           *string   `json:"model,omitempty"`
+	OsVersion       *string   `json:"osVersion,omitempty"`
+	Platform        *Platform `json:"platform,omitempty"`
+}
+
 // BetaTesterAttributes defines model for BetaTester.Attributes
 //
 // https://developer.apple.com/documentation/appstoreconnectapi/betatester/attributes
 type BetaTesterAttributes struct {
-	Email      *Email          `json:"email,omitempty"`
-	FirstName  *string         `json:"firstName,omitempty"`
-	InviteType *BetaInviteType `json:"inviteType,omitempty"`
-	LastName   *string         `json:"lastName,omitempty"`
+	AppDevices []BetaTesterAppDevice `json:"appDevices,omitempty"`
+	Email      *Email                `json:"email,omitempty"`
+	FirstName  *string               `json:"firstName,omitempty"`
+	InviteType *BetaInviteType       `json:"inviteType,omitempty"`
+	LastName   *string               `json:"lastName,omitempty"`
+	State      *BetaTesterState      `json:"state,omitempty"`
 }
 
 // BetaTesterRelationships defines model for BetaTester.Relationships

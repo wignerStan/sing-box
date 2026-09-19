@@ -159,7 +159,7 @@ icon: material/new-box
 
 为 Tailscale 创建系统 TUN 接口。
 
-在此模式下，主机 TUN 是唯一的通用数据平面。不会创建内嵌 gVisor 网络栈，端点也不会暴露 `tun.Port` 流量路径。`ssh_server` 与 Taildrop 当前不可与 `system_interface` 同时使用。
+在此模式下，主机 TUN 是唯一的通用数据平面。不会创建内嵌 Go 用户态 网络栈，端点也不会暴露 `tun.Port` 流量路径。`ssh_server` 与 Taildrop 当前不可与 `system_interface` 同时使用。
 
 在 Darwin 上选择 `exit_node` 后，sing-box 还会为此 TUN 维护按接口限定的
 IPv4/IPv6 默认路由。路由使用本机 Tailscale 地址作为接口地址，仅供绑定到

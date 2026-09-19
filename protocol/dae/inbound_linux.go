@@ -128,6 +128,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		LANInterfaces:             options.LANInterface,
 		WANInterfaces:             options.WANInterface,
 		OutputMark:                uint32(options.OutputMark),
+		BypassMark:                uint32(options.BypassMark),
+		BypassMarkMask:            uint32(options.BypassMarkMask),
 		AutoConfigureKernel:       options.AutoConfigureKernel,
 		ConnectionStateMapEntries: options.BPFConnStateMapSize,
 		RequireProcessMetadata:    options.RequireProcessMetadata,
@@ -189,6 +191,8 @@ func normalizeInterfaces(interfaces []string) []string {
 func equalCaptureConfig(left, right ebpfinbound.CaptureConfig) bool {
 	return left.TProxyPort == right.TProxyPort &&
 		left.OutputMark == right.OutputMark &&
+		left.BypassMark == right.BypassMark &&
+		left.BypassMarkMask == right.BypassMarkMask &&
 		left.AutoConfigureKernel == right.AutoConfigureKernel &&
 		left.ConnectionStateMapEntries == right.ConnectionStateMapEntries &&
 		left.RequireProcessMetadata == right.RequireProcessMetadata &&

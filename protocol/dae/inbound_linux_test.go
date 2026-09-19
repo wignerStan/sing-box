@@ -320,6 +320,52 @@ func TestMetadataMapsVerifiedProcessFacts(t *testing.T) {
 	_ = runtime.Close()
 }
 
+// A live provider cannot change the kernel exemption during handler handoff.
+// Check the option boundary and restart requirement together, before hooks move.
+func TestRuntimeCoordinatorPreservesBypassPolicy(t *testing.T) {
+	manager := &testNetworkManager{}
+	runtime := &testRuntime{listeners: newTestListenerSet(t)}
+	factoryCalls := 0
+	coordinator := &runtimeCoordinator{newRuntime: func(_ context.Context, options ebpfinbound.Options) (ebpfinbound.Runtime, error) {
+		factoryCalls++
+		if options.Capture.BypassMark != 0x80000 || options.Capture.BypassMarkMask != 0xff0000 {
+			t.Fatalf("provider bypass = %#x/%#x", options.Capture.BypassMark, options.Capture.BypassMarkMask)
+		}
+		return runtime, nil
+	}}
+	ctx := service.ContextWith[adapter.NetworkManager](context.Background(), manager)
+	create := func(mark, mask option.FwMark) *Inbound {
+		t.Helper()
+		raw, err := NewInbound(ctx, nil, log.NewNOPFactory().Logger(), "dae-in", option.DAEInboundOptions{
+			LANInterface: []string{"test-lan0"}, BypassMark: mark, BypassMarkMask: mask,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		instance := raw.(*Inbound)
+		instance.coordinator = coordinator
+		t.Cleanup(func() { _ = instance.Close() })
+		return instance
+	}
+	first := create(0x80000, 0xff0000)
+	if err := first.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	same := create(0x80000, 0xff0000)
+	if err := same.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	for _, policy := range [][2]option.FwMark{{0x40000, 0xff0000}, {0x80000, 0xf0000}, {0, 0}} {
+		changed := create(policy[0], policy[1])
+		if err := changed.Start(adapter.StartStateStart); err == nil || !strings.Contains(err.Error(), "process restart") {
+			t.Fatalf("changed bypass %#x/%#x start error = %v", policy[0], policy[1], err)
+		}
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("provider factory called %d times, want 1", factoryCalls)
+	}
+}
+
 func newTestInbound(t *testing.T, coordinator *runtimeCoordinator, manager *testNetworkManager, tag string, port uint16) *Inbound {
 	t.Helper()
 	ctx := service.ContextWith[adapter.NetworkManager](context.Background(), manager)
