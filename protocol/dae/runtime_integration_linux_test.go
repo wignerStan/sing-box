@@ -147,7 +147,10 @@ func (p *integrationSingBox) stop(t *testing.T) {
 		return
 	}
 	if err := p.command.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatal(err)
+		// A crashed or OOM-killed child cannot be signaled. Wait for the log
+		// copier before reporting the original output that explains its exit.
+		p.kill()
+		t.Fatalf("signal sing-box graceful stop: %v\n%s", err, p.logs.String())
 	}
 	select {
 	case err := <-p.done:

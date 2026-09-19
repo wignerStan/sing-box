@@ -23,9 +23,14 @@
           "order": 3,
           "path": "patches/dae/0003-kernel-mark-bypass.patch",
           "sha256": "806b237d218c868b643befe38684e51ccfc82412403afbc232c4ba7b16197401"
+        },
+        {
+          "order": 4,
+          "path": "patches/dae/0004-authoritative-output-mark.patch",
+          "sha256": "c198d005be873920bd912fafe92d73a17d85a0954f46b7db6ecf4d4a20af1a74"
         }
       ],
-      "result_tree": "59322aae277ba2d3ae2766ee3d090ac436e3d0c0",
+      "result_tree": "e770a200bcb6d82a1fdc1fd3b31a7a838abd30e0",
       "source": {
         "commit": "5db27a0028d36e7847bd3796497df952337a20e2",
         "path": "third_party/dae"
@@ -646,7 +651,7 @@
     "format": "go-mod-vendor",
     "modules_txt_sha256": "8f6d4d44cdefa35160a24a3341f2ef2b97ad9d9d3f5d97f8b7930fe03b9a14f2",
     "path": "vendor",
-    "tree_sha256": "db69c961005e25941e9002a71f339e724f30e32e5181a939a59053ecaf6a7da0"
+    "tree_sha256": "9f6629093c9ae5dccfec1863efaf8a79469dff399c361fe8cc80026be9e2361f"
   },
   "schema_version": "sing-box-vendor-lock/v2"
 }
