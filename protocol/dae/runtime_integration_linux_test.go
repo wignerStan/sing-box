@@ -228,7 +228,7 @@ func assertIntegrationRoutingMarksRejected(t *testing.T, binary string) {
 				config["outbounds"].([]any)[0].(map[string]any)["routing_mark"] = "0x100"
 			case "dns.routing_mark":
 				config["dns"] = map[string]any{"servers": []any{map[string]any{
-					"type": "udp", "tag": "test-dns", "server": "127.0.0.1", "routing_mark": "0x100",
+					"type": "udp", "tag": "test-dns", "server": "127.0.0.1", "detour": "direct", "routing_mark": "0x100",
 				}}}
 			}
 			raw, err = json.Marshal(config)

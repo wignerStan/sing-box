@@ -57,13 +57,8 @@ func NewDefault(ctx context.Context, options option.DialerOptions) (*DefaultDial
 	connectionManager := service.FromContext[adapter.ConnectionManager](ctx)
 	networkManager := service.FromContext[adapter.NetworkManager](ctx)
 	platformInterface := service.FromContext[adapter.PlatformInterface](ctx)
-	if owner, _ := ctx.Value(exclusiveOutputMarkOwnerKey{}).(string); owner != "" {
-		if options.RoutingMark != 0 {
-			return nil, E.New("routing_mark conflicts with ", owner, " automatic output mark; remove the explicit mark")
-		}
-		if networkManager != nil && networkManager.DefaultOptions().RoutingMark != 0 {
-			return nil, E.New("route.default_mark conflicts with ", owner, " automatic output mark; remove the explicit mark")
-		}
+	if err := checkExclusiveOutputMark(ctx, options); err != nil {
+		return nil, err
 	}
 
 	var (

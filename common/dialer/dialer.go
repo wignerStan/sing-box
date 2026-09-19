@@ -38,6 +38,9 @@ func New(ctx context.Context, options option.DialerOptions, remoteIsDomain bool)
 }
 
 func NewWithOptions(options Options) (N.Dialer, error) {
+	if err := checkExclusiveOutputMark(options.Context, options.Options); err != nil {
+		return nil, err
+	}
 	dialOptions := options.Options
 	var (
 		dialer N.Dialer
