@@ -51,6 +51,8 @@ Private transparent listener port. The default is `12345`.
 
 Mark applied to sing-box DNS, outbound, and transparent UDP reply sockets so their traffic is not captured again. The default is `0x100`. A `dae` inbound cannot coexist with another automatic capture owner, such as a TUN inbound with `auto_redirect`.
 
+Do not set `route.default_mark` or `routing_mark` on DNS servers or outbounds when a `dae` inbound is configured. DAE applies `output_mark` automatically when its runtime starts, including to dialers created earlier. Configuration checks reject explicit marks before capture is attached.
+
 #### bypass_mark and bypass_mark_mask
 
 Optional kernel capture exemption for an existing network owner. With a nonzero

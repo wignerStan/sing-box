@@ -63,6 +63,7 @@ func TestDAEInboundRealDatapath(t *testing.T) {
 		t.Fatalf("clean stale provider state before test: %v\n%s", err, output)
 	}
 
+	assertIntegrationRoutingMarksRejected(t, binary)
 	prepareIntegrationNetwork(t)
 	assertIntegrationProviderGone(t)
 	server := startIntegrationEchoServer(t)
@@ -184,7 +185,9 @@ func writeIntegrationConfig(t *testing.T) string {
 			"lan_interface":                []string{integrationLAN},
 			"wan_interface":                []string{integrationWAN},
 			"tproxy_port":                  23456,
-			"output_mark":                  "0x1ee0",
+			"output_mark":                  "0x100",
+			"bypass_mark":                  "0x80000",
+			"bypass_mark_mask":             "0xff0000",
 			"auto_config_kernel_parameter": true,
 			"require_process_metadata":     true,
 		}},
@@ -200,6 +203,48 @@ func writeIntegrationConfig(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// Check the invalid configurations before creating test interfaces or attaching
+// capture. These were accepted by the old schema check and failed only when
+// production DNS/outbound sockets were opened after the DAE lease started.
+func assertIntegrationRoutingMarksRejected(t *testing.T, binary string) {
+	t.Helper()
+	for _, source := range []string{"route.default_mark", "outbound.routing_mark", "dns.routing_mark"} {
+		t.Run("reject-"+source, func(t *testing.T) {
+			path := writeIntegrationConfig(t)
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config map[string]any
+			if err := json.Unmarshal(raw, &config); err != nil {
+				t.Fatal(err)
+			}
+			switch source {
+			case "route.default_mark":
+				config["route"].(map[string]any)["default_mark"] = "0x100"
+			case "outbound.routing_mark":
+				config["outbounds"].([]any)[0].(map[string]any)["routing_mark"] = "0x100"
+			case "dns.routing_mark":
+				config["dns"] = map[string]any{"servers": []any{map[string]any{
+					"type": "udp", "tag": "test-dns", "server": "127.0.0.1", "routing_mark": "0x100",
+				}}}
+			}
+			raw, err = json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command(binary, "check", "-c", path).CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "conflicts with dae automatic output mark") {
+				t.Fatalf("configuration check must reject before capture: %v\n%s", err, output)
+			}
+			assertIntegrationProviderGone(t)
+		})
+	}
 }
 
 func testAllIntegrationTraffic(t *testing.T) {

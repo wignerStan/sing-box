@@ -61,3 +61,15 @@ validate it with `python3 tools/vendor/verify.py --require-source`. Build only
 from the resulting standard Go vendor projection. The private logical workspace
 outside the product checkout records original/rebased commits, tool versions,
 commands, test results, and artifact digests; it is not a public dependency.
+
+The first guarded real-host cutover exposed a configuration error that the
+isolated datapath config did not contain: explicit per-DNS/per-outbound marks
+and `route.default_mark` conflicted with DAE's automatic socket-mark lease.
+The no-capture canary accepted those marks because it had no active lease.
+The host was rolled back. Box construction now declares DAE mark ownership so
+all default dialers reject explicit marks before startup, and `check` rejects
+the route default immediately. Runtime conflict semantics remain unchanged.
+Regression coverage includes DNS/outbound/default-mark check failures before
+attachment and real TCP/UDP/packet sockets receiving the dynamically activated
+lease mark without explicit marks. Canary bypass marks belong only to the
+separate no-DAE configuration.
