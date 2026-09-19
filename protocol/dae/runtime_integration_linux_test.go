@@ -242,7 +242,7 @@ func assertIntegrationRoutingMarksRejected(t *testing.T, binary string) {
 			if err == nil || !strings.Contains(string(output), "conflicts with dae automatic output mark") {
 				t.Fatalf("configuration check must reject before capture: %v\n%s", err, output)
 			}
-			assertIntegrationProviderGone(t)
+			assertIntegrationProviderResourcesGone(t)
 		})
 	}
 }
@@ -460,7 +460,7 @@ func runIntegrationCommand(name string, arguments ...string) error {
 	return exec.Command(name, arguments...).Run()
 }
 
-func assertIntegrationProviderGone(t *testing.T) {
+func assertIntegrationProviderResourcesGone(t *testing.T) {
 	t.Helper()
 	if _, err := os.Stat(providerOwnerRecord); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("provider ownership record remains: %v", err)
@@ -473,6 +473,11 @@ func assertIntegrationProviderGone(t *testing.T) {
 	} else if strings.Contains(string(output), providerNetNS) {
 		t.Fatalf("provider namespace remains: %s", output)
 	}
+}
+
+func assertIntegrationProviderGone(t *testing.T) {
+	t.Helper()
+	assertIntegrationProviderResourcesGone(t)
 	for _, interfaceName := range []string{integrationLAN, integrationWAN} {
 		output, err := exec.Command("tc", "qdisc", "show", "dev", interfaceName).CombinedOutput()
 		if err != nil {
