@@ -84,3 +84,16 @@ and mask `0xff0000`, leaving its existing policy-routing behavior intact.
 Privileged tests exercise the generated programs in all eight directions and
 real IPv4/IPv6 TCP/UDP round trips from separately marked processes. Run these
 tests in a disposable network and cgroup namespace, never on a production router.
+
+Incoming UDP replies to connected host sockets carrying `OutputMark` or the configured
+`BypassMark`/`BypassMarkMask` remain on the kernel path even when they arrive on
+a LAN-classified interface. The current interface network namespace is checked
+before capture conntrack; the separate capture namespace is not the owner of
+these sockets. The original packet mark is preserved. This covers local
+resolvers reached over a TUN interface without exempting addresses or ports.
+
+This exemption intentionally excludes every unconnected UDP socket. A marked
+transparent reply-only socket can bind a foreign address, and a marked wildcard
+socket can match unrelated transit destinations sharing its port. Both remain
+on the existing capture path. Supporting unconnected LAN upstream replies
+requires a separate proof that the destination belongs to the host.
