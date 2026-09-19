@@ -51,6 +51,8 @@ Linux TC/cgroup eBPF -> 透明 TCP/UDP 监听器 -> sing-box 路由 -> sing-box 
 
 应用于 sing-box DNS、出站和透明 UDP 回复套接字的标记，防止流量被重复捕获。默认值为 `0x100`。`dae` 不能与另一个自动重定向捕获所有者同时使用，例如启用了 `auto_redirect` 的 TUN 入站。
 
+配置 `dae` 入站时，不要设置 `route.default_mark`，也不要在 DNS 服务器或出站上设置 `routing_mark`。DAE 在运行时启动后自动应用 `output_mark`，包括此前创建的拨号器。配置检查会在挂载捕获钩子前拒绝显式标记。
+
 #### bypass_mark / bypass_mark_mask
 
 可选的内核捕获豁免。掩码非零且 `(packet_mark & bypass_mark_mask) == bypass_mark`

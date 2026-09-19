@@ -119,6 +119,15 @@ func New(options Options) (*Box, error) {
 		ctx = context.Background()
 	}
 	ctx = service.ContextWithDefaultRegistry(ctx)
+	for _, inboundOptions := range options.Inbounds {
+		if inboundOptions.Type == C.TypeDAE {
+			ctx = dialer.ContextWithExclusiveOutputMark(ctx, "dae")
+			if options.Route != nil && options.Route.DefaultMark != 0 {
+				return nil, E.New("route.default_mark conflicts with dae automatic output mark; remove the explicit mark")
+			}
+			break
+		}
+	}
 
 	endpointRegistry := service.FromContext[adapter.EndpointRegistry](ctx)
 	inboundRegistry := service.FromContext[adapter.InboundRegistry](ctx)
