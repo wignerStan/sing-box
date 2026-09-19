@@ -5,6 +5,7 @@ package dae
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,25 +18,32 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	mDNS "github.com/miekg/dns"
 )
 
 const (
-	integrationBinaryEnv  = "SING_BOX_DAE_BINARY"
-	integrationServerEnv  = "SING_BOX_DAE_ECHO_SERVER"
-	integrationClientEnv  = "SING_BOX_DAE_CLIENT_NETWORK"
-	integrationAddressEnv = "SING_BOX_DAE_CLIENT_ADDRESS"
-	integrationPayloadEnv = "SING_BOX_DAE_CLIENT_PAYLOAD"
-	integrationWAN        = "sbciwan0"
-	integrationWANPeer    = "sbciwpeer0"
-	integrationWANNetNS   = "sb-ci-wan"
-	integrationLAN        = "sbcilan0"
-	integrationLANPeer    = "sbcilpeer0"
-	integrationLANNetNS   = "sb-ci-lan"
-	providerOwnerRecord   = "/run/dae-ebpfinbound/owner.json"
-	providerNetNS         = "dae-ebpf-inbound"
+	integrationBinaryEnv    = "SING_BOX_DAE_BINARY"
+	integrationServerEnv    = "SING_BOX_DAE_ECHO_SERVER"
+	integrationDNSServerEnv = "SING_BOX_DAE_DNS_SERVER"
+	integrationClientEnv    = "SING_BOX_DAE_CLIENT_NETWORK"
+	integrationAddressEnv   = "SING_BOX_DAE_CLIENT_ADDRESS"
+	integrationPayloadEnv   = "SING_BOX_DAE_CLIENT_PAYLOAD"
+	integrationWAN          = "sbciwan0"
+	integrationWANPeer      = "sbciwpeer0"
+	integrationWANNetNS     = "sb-ci-wan"
+	integrationLAN          = "sbcilan0"
+	integrationLANPeer      = "sbcilpeer0"
+	integrationLANNetNS     = "sb-ci-lan"
+	providerOwnerRecord     = "/run/dae-ebpfinbound/owner.json"
+	providerNetNS           = "dae-ebpf-inbound"
 )
 
 func TestDAEInboundRealDatapath(t *testing.T) {
+	if os.Getenv(integrationDNSServerEnv) == "1" {
+		runIntegrationDNSServer(t)
+		return
+	}
 	if os.Getenv(integrationServerEnv) == "1" {
 		runIntegrationEchoServer(t)
 		return
@@ -73,6 +81,8 @@ func TestDAEInboundRealDatapath(t *testing.T) {
 			_ = server.Wait()
 		}
 	})
+	dnsServer := startIntegrationServerProcess(t, integrationLANNetNS, integrationDNSServerEnv)
+	t.Cleanup(func() { _ = dnsServer.Process.Kill(); _ = dnsServer.Wait() })
 	configPath := writeIntegrationConfig(t)
 
 	var active *integrationSingBox
@@ -85,6 +95,7 @@ func TestDAEInboundRealDatapath(t *testing.T) {
 
 	active = startIntegrationSingBox(t, binary, configPath)
 	testAllIntegrationTraffic(t)
+	testIntegrationDNSReplies(t)
 	active.stop(t)
 	active = nil
 	assertIntegrationProviderGone(t)
@@ -190,9 +201,14 @@ func writeIntegrationConfig(t *testing.T) string {
 			"bypass_mark_mask":             "0xff0000",
 			"auto_config_kernel_parameter": true,
 			"require_process_metadata":     true,
-		}},
+		}, map[string]any{"type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 10553}},
+		"dns": map[string]any{"servers": []any{map[string]any{
+			"type": "udp", "tag": "lan-dns", "server": "192.0.2.2",
+		}}, "final": "lan-dns"},
 		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
-		"route":     map[string]any{"final": "direct"},
+		"route": map[string]any{"final": "direct", "rules": []any{map[string]any{
+			"inbound": "dns-in", "action": "hijack-dns",
+		}}},
 	}
 	raw, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -227,9 +243,9 @@ func assertIntegrationRoutingMarksRejected(t *testing.T, binary string) {
 			case "outbound.routing_mark":
 				config["outbounds"].([]any)[0].(map[string]any)["routing_mark"] = "0x100"
 			case "dns.routing_mark":
-				config["dns"] = map[string]any{"servers": []any{map[string]any{
-					"type": "udp", "tag": "test-dns", "server": "127.0.0.1", "detour": "direct", "routing_mark": "0x100",
-				}}}
+				server := config["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+				server["routing_mark"] = "0x100"
+				server["detour"] = "direct"
 			}
 			raw, err = json.Marshal(config)
 			if err != nil {
@@ -312,8 +328,13 @@ func runIntegrationClient(t *testing.T, network, address, payload string) {
 
 func startIntegrationEchoServer(t *testing.T) *exec.Cmd {
 	t.Helper()
-	command := exec.Command("ip", "netns", "exec", integrationWANNetNS, os.Args[0], "-test.run=^TestDAEInboundRealDatapath$")
-	command.Env = append(os.Environ(), integrationServerEnv+"=1")
+	return startIntegrationServerProcess(t, integrationWANNetNS, integrationServerEnv)
+}
+
+func startIntegrationServerProcess(t *testing.T, namespace, serverEnv string) *exec.Cmd {
+	t.Helper()
+	command := exec.Command("ip", "netns", "exec", namespace, os.Args[0], "-test.run=^TestDAEInboundRealDatapath$")
+	command.Env = append(os.Environ(), serverEnv+"=1")
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -351,6 +372,53 @@ func startIntegrationEchoServer(t *testing.T) *exec.Cmd {
 		t.Fatalf("echo server did not become ready\n%s", stderr.String())
 	}
 	return command
+}
+
+// The real UDP upstream lives behind the LAN interface, reproducing a host
+// resolver such as MagicDNS. Both client transports must receive the answer;
+// neither a WAN-only upstream nor a DNS cache hit can satisfy this test.
+func testIntegrationDNSReplies(t *testing.T) {
+	t.Helper()
+	for _, network := range []string{"udp", "tcp"} {
+		t.Run("dns-lan-upstream-"+network, func(t *testing.T) {
+			message := new(mDNS.Msg)
+			message.SetQuestion(network+".magic.test.", mDNS.TypeA)
+			client := mDNS.Client{Net: network, Timeout: 3 * time.Second}
+			response, _, err := client.ExchangeContext(context.Background(), message, "127.0.0.1:10553")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Rcode != mDNS.RcodeSuccess || len(response.Answer) != 1 {
+				t.Fatalf("unexpected DNS answer: %s", response)
+			}
+			answer, ok := response.Answer[0].(*mDNS.A)
+			if !ok || !answer.A.Equal(net.ParseIP("192.0.2.42")) {
+				t.Fatalf("unexpected LAN upstream answer: %s", response)
+			}
+		})
+	}
+}
+
+func runIntegrationDNSServer(t *testing.T) {
+	t.Helper()
+	server := mDNS.Server{
+		Addr: "192.0.2.2:53", Net: "udp",
+		NotifyStartedFunc: func() { fmt.Println("READY") },
+		Handler: mDNS.HandlerFunc(func(writer mDNS.ResponseWriter, query *mDNS.Msg) {
+			response := new(mDNS.Msg)
+			response.SetReply(query)
+			if len(query.Question) == 1 && query.Question[0].Qtype == mDNS.TypeA {
+				response.Answer = []mDNS.RR{&mDNS.A{
+					Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60},
+					A:   net.ParseIP("192.0.2.42"),
+				}}
+			}
+			_ = writer.WriteMsg(response)
+		}),
+	}
+	if err := server.ListenAndServe(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func runIntegrationEchoServer(t *testing.T) {

@@ -73,3 +73,25 @@ Regression coverage includes DNS/outbound/default-mark check failures before
 attachment and real TCP/UDP/packet sockets receiving the dynamically activated
 lease mark without explicit marks. Canary bypass marks belong only to the
 separate no-DAE configuration.
+
+The second guarded cutover preserved SSH, exit traffic, public DNS and proxy
+services, but exposed LAN-side UDP reply recapture for the host MagicDNS
+resolver. Marked queries had bypassed capture; unmarked replies were looked up
+in the provider namespace instead of the host socket namespace. Patch0005
+checks current-namespace connected UDP socket ownership before conntrack and preserves
+only replies to sockets carrying the configured own/bypass mark, without any
+DNS-specific address or port exemption. The isolated before test failed all
+six marked LAN UDP4/6 returns while TCP4/6 passed; after generation all twelve
+LAN returns passed alongside the existing lifecycle/capture tests. The full
+product fixture also exercises real LAN-side DNS replies through TCP and UDP
+DNS client requests.
+
+The exemption is deliberately limited to connected UDP sockets, whose complete
+local/remote tuple proves ownership. Marked unconnected transparent reply-only
+bindings and wildcard listeners can also match transit packets; they retain
+existing capture behavior and have explicit negative regressions. Broader
+unconnected LAN upstream handling requires separate destination-local proof.
+A bounded raw L3 test-run experiment could not supply required protocol
+metadata on this kernel; it is retained as a limitation rather than a passing
+test. L2/L3 share the reviewed parser and classifier, and the guarded real
+Tailscale interface probe remains required for final operational acceptance.

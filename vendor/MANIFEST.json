@@ -3,7 +3,7 @@
     {
       "module": "github.com/daeuniverse/dae/ebpfinbound",
       "name": "dae-ebpfinbound",
-      "result_tree": "e770a200bcb6d82a1fdc1fd3b31a7a838abd30e0",
+      "result_tree": "3a35029930334fc04ee03a40d5e6f5d1d8e5bbc3",
       "source_commit": "5db27a0028d36e7847bd3796497df952337a20e2"
     },
     {
@@ -604,7 +604,7 @@
     "format": "go-mod-vendor",
     "modules_txt_sha256": "8f6d4d44cdefa35160a24a3341f2ef2b97ad9d9d3f5d97f8b7930fe03b9a14f2",
     "path": "vendor",
-    "tree_sha256": "9f6629093c9ae5dccfec1863efaf8a79469dff399c361fe8cc80026be9e2361f"
+    "tree_sha256": "9dcaf2dc3ebbd75f3198780516e1409833010933a416db36f025648e8be2276d"
   },
   "schema_version": "sing-box-vendor-manifest/v2"
 }

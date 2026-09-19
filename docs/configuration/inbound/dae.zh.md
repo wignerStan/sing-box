@@ -53,6 +53,8 @@ Linux TC/cgroup eBPF -> 透明 TCP/UDP 监听器 -> sing-box 路由 -> sing-box 
 
 配置 `dae` 入站时，不要设置 `route.default_mark`，也不要在 DNS 服务器或出站上设置 `routing_mark`。DAE 在运行时启动后自动应用 `output_mark`，包括此前创建的拨号器。配置检查会在挂载捕获钩子前拒绝显式标记。
 
+发往带有输出标记或豁免标记的已连接本机套接字的 UDP 回复也会保留在内核路径中，包括通过归类为 LAN 的 TUN 接口访问的 DNS 解析器；不需要针对解析器地址或端口添加豁免。 未连接套接字保持原有捕获行为：通配绑定和仅用于透明回复的绑定无法证明转发数据包属于本机。
+
 #### bypass_mark / bypass_mark_mask
 
 可选的内核捕获豁免。掩码非零且 `(packet_mark & bypass_mark_mask) == bypass_mark`

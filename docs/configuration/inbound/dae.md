@@ -53,6 +53,8 @@ Mark applied to sing-box DNS, outbound, and transparent UDP reply sockets so the
 
 Do not set `route.default_mark` or `routing_mark` on DNS servers or outbounds when a `dae` inbound is configured. DAE applies `output_mark` automatically when its runtime starts, including to dialers created earlier. Configuration checks reject explicit marks before capture is attached.
 
+Incoming UDP replies addressed to connected host sockets carrying the output or bypass mark also remain on the kernel path. This includes DNS resolvers reached through a LAN-classified TUN interface; no resolver IP or port exemption is required. Unconnected sockets retain the existing capture behavior: wildcard and transparent reply-only bindings do not prove ownership of a transit packet.
+
 #### bypass_mark and bypass_mark_mask
 
 Optional kernel capture exemption for an existing network owner. With a nonzero
