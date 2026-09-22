@@ -3695,6 +3695,10 @@ func (c *Conn) onPortMapChanged(portmappertype.Mapping) { c.ReSTUN("portmap-chan
 // If Conn.staticEndpoints have been updated, calling ReSTUN will also result in
 // the new endpoints being advertised.
 func (c *Conn) ReSTUN(why string) {
+	// A minor/same-state link notification does not request Rebind. Repair
+	// failed sockets before discovery instead of probing through a placeholder
+	// forever. This must run without c.mu (PMTUD can acquire it).
+	c.retryUnboundSockets()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -3764,14 +3768,25 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// from the perspective of ruc receive functions.
 	ruc.mu.Lock()
 	defer ruc.mu.Unlock()
+	return c.bindSocketLocked(ruc, network, curPortFate)
+}
+
+// bindSocketLocked requires ruc.mu. It is shared by ordinary rebinds and the
+// failed-socket retry path so a concurrent close/rebind cannot be overtaken.
+func (c *Conn) bindSocketLocked(ruc *RebindingUDPConn, network string, curPortFate currentPortFate) error {
+	if c.closing.Load() {
+		return net.ErrClosed
+	}
 
 	if runtime.GOOS == "js" {
+		ruc.clearBindFailureLocked()
 		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
 		return nil
 	}
 
 	if debugAlwaysDERP() {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
+		ruc.clearBindFailureLocked()
 		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
 		return nil
 	}
@@ -3797,6 +3812,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	}
 
 	var pconn nettype.PacketConn
+	var lastErr error
 	for _, port := range ports {
 		// Close the existing conn, in case it is sitting on the port we want.
 		err := ruc.closeLocked()
@@ -3806,6 +3822,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		// Open a new one with the desired port.
 		pconn, err = c.listenPacket(network, port)
 		if err != nil {
+			lastErr = err
 			c.logf("magicsock: unable to bind %v port %d: %v", network, port, err)
 			continue
 		}
@@ -3832,6 +3849,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
 		}
 		ruc.setConnLocked(pconn, network, c.bind.BatchSize(), c.controlKnobs)
+		ruc.clearBindFailureLocked()
 		if network == "udp4" {
 			c.health.SetUDP4Unbound(false)
 		}
@@ -3840,13 +3858,17 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 
 	// Failed to bind, including on port 0 (!).
 	// Set pconn to a dummy conn whose reads block until closed.
-	// This keeps the receive funcs alive for a future in which
-	// we get a link change and we can try binding again.
-	ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
+	// Keep receive funcs alive, but do not report successful writes. The next
+	// eligible endpoint-discovery pass retries only this failed socket.
+	err := fmt.Errorf("failed to bind any ports (tried %v): %w", ports, lastErr)
+	dummy := newBlockForeverConn()
+	dummy.writeErr = err
+	ruc.setConnLocked(dummy, "", c.bind.BatchSize(), c.controlKnobs)
+	ruc.noteBindFailureLocked(err, time.Now())
 	if network == "udp4" {
 		c.health.SetUDP4Unbound(true)
 	}
-	return fmt.Errorf("failed to bind any ports (tried %v)", ports)
+	return err
 }
 
 type currentPortFate uint8

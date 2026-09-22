@@ -1,10 +1,11 @@
 class SingBoxWigner < Formula
   desc "Universal proxy platform with native DAE and Tailscale integrations"
   homepage "https://github.com/wignerStan/sing-box"
-  url "https://github.com/wignerStan/sing-box/releases/download/v1.14.0-wigner.1/sing-box-v1.14.0-wigner.1-source.tar.gz"
-  version "1.14.0-wigner.1"
-  sha256 "0f268c47e7e9603fcb1e83237ecd28646921a08b93a374df8bc24c7e4d4f4085"
+  url "https://github.com/wignerStan/sing-box.git",
+      revision: "9b472cfd6731db200886b7a010d053a235290ac6"
+  version "1.14.0-wigner.2"
   license "GPL-3.0-or-later"
+  version_scheme 1
 
   depends_on "go" => :build
 
