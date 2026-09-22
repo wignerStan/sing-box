@@ -49,7 +49,7 @@ jobs:
         run: |
           set -euxo pipefail
           (cd .vendor-work/dae/ebpfinbound && go test -race -count=1 ./... && go vet ./...)
-          (cd .vendor-work/tailscale && go test -race -count=1 ./tsnet ./net/netmon ./util/linuxfw && go vet ./tsnet ./net/netmon ./util/linuxfw)
+          (cd .vendor-work/tailscale && go test -race -count=1 ./tsnet ./net/netmon ./util/linuxfw ./wgengine/magicsock && go vet ./tsnet ./net/netmon ./util/linuxfw ./wgengine/magicsock)
       - name: Test real Tailscale firewall behavior
         run: |
           set -euxo pipefail
@@ -98,6 +98,12 @@ jobs:
           set -euxo pipefail
           python3 -m unittest discover -s tools/vendor -p 'test_*.py' -v
           python3 tools/vendor/verify.py --require-source
+      - name: Test native UDP bind recovery from canonical patched source
+        run: |
+          set -euxo pipefail
+          python3 tools/vendor/materialize.py --keep-work
+          go test -mod=mod -race github.com/sagernet/tailscale/wgengine/magicsock -run '^TestBindRecovery' -count=10 -timeout=90s
+          git diff --exit-code -- go.mod go.sum deps/vendor-lock.json vendor
       - name: Test native Tailscale lifecycle from Go vendor projection
         env:
           GOPROXY: 'off'
