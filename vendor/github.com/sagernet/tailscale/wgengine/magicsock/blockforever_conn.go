@@ -19,6 +19,9 @@ type blockForeverConn struct {
 	mu     syncs.Mutex
 	cond   *sync.Cond
 	closed bool
+	// Non-nil only for failed binds, not intentionally disabled UDP.
+	// Immutable after the connection is published.
+	writeErr error
 }
 
 func (c *blockForeverConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.AddrPort, err error) {
@@ -31,6 +34,9 @@ func (c *blockForeverConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.Addr
 }
 
 func (c *blockForeverConn) WriteToUDPAddrPort(p []byte, addr netip.AddrPort) (int, error) {
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
 	// Silently drop writes.
 	return len(p), nil
 }

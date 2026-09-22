@@ -9,14 +9,14 @@
     {
       "module": "github.com/sagernet/tailscale",
       "name": "tailscale",
-      "result_tree": "619a2708320b0b1bdc8460a3eea9160785b31c77",
+      "result_tree": "9a5ace9d46f510847adba724dbaaddb360c1474b",
       "source_commit": "c8e28eeffe16a390ae8e320500175de6207f521f"
     }
   ],
   "generated_by": "tools/vendor/materialize.py",
   "lock": "deps/vendor-lock.json",
   "projection": {
-    "entries": 8976,
+    "entries": 8977,
     "excluded_repository_metadata": [
       {
         "kind": "file",
@@ -604,7 +604,7 @@
     "format": "go-mod-vendor",
     "modules_txt_sha256": "10801d64d7248b9d50af7a9501619adb5ab887087d21445fe06b0ef40262898c",
     "path": "vendor",
-    "tree_sha256": "70b44cefdcbff3f042af1b93c3f63b932194f7820e7e1a52163cf06976e8d6d6"
+    "tree_sha256": "f1a7d5d91e099b387748af39b1dc7040971b7d3c0227710c2697f081bf69cdbf"
   },
   "schema_version": "sing-box-vendor-manifest/v2"
 }

@@ -1,0 +1,463 @@
+diff --git a/wgengine/magicsock/bind_recovery.go b/wgengine/magicsock/bind_recovery.go
+new file mode 100644
+index 000000000..5b4cc3b57
+--- /dev/null
++++ b/wgengine/magicsock/bind_recovery.go
+@@ -0,0 +1,62 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++package magicsock
++
++import "time"
++
++const (
++	bindRetryInitial = time.Second
++	bindRetryMaximum = 30 * time.Second
++)
++
++// These methods require RebindingUDPConn.mu. Failure state belongs to the
++// socket, not the network snapshot: the physical-interface binder and netmon
++// may become ready in a different order, even on the very same network.
++func (ruc *RebindingUDPConn) clearBindFailureLocked() {
++	ruc.bindErr = nil
++	ruc.bindRetryDelay = 0
++	ruc.bindRetryAfter = time.Time{}
++}
++
++func (ruc *RebindingUDPConn) noteBindFailureLocked(err error, now time.Time) {
++	ruc.bindErr = err
++	if ruc.bindRetryDelay == 0 {
++		ruc.bindRetryDelay = bindRetryInitial
++	} else {
++		ruc.bindRetryDelay = min(2*ruc.bindRetryDelay, bindRetryMaximum)
++	}
++	ruc.bindRetryAfter = now.Add(ruc.bindRetryDelay)
++}
++
++// retryUnboundSockets uses the existing minor-link/periodic discovery lifecycle.
++// There is no independent timer, goroutine, or unbound fallback dialer. The
++// original physical-interface ListenPacket hook remains authoritative.
++func (c *Conn) retryUnboundSockets() {
++	if c.closing.Load() || c.networkDown() || c.onlyTCP443.Load() {
++		return
++	}
++	now := time.Now()
++	v6 := c.retryUnboundSocket(&c.pconn6, "udp6", now)
++	v4 := c.retryUnboundSocket(&c.pconn4, "udp4", now)
++	if v4 && c.portMapper != nil {
++		c.portMapper.SetLocalPort(c.LocalPort())
++	}
++	if v4 || v6 {
++		c.UpdatePMTUD()
++		c.resetEndpointStates()
++	}
++}
++
++func (c *Conn) retryUnboundSocket(ruc *RebindingUDPConn, network string, now time.Time) bool {
++	ruc.mu.Lock()
++	defer ruc.mu.Unlock()
++	if c.closing.Load() || ruc.bindErr == nil || now.Before(ruc.bindRetryAfter) {
++		return false
++	}
++	if err := c.bindSocketLocked(ruc, network, keepCurrentPort); err != nil {
++		return false
++	}
++	c.logf("magicsock: recovered %s socket after bind failure", network)
++	return true
++}
+diff --git a/wgengine/magicsock/bind_recovery_test.go b/wgengine/magicsock/bind_recovery_test.go
+new file mode 100644
+index 000000000..c3c984155
+--- /dev/null
++++ b/wgengine/magicsock/bind_recovery_test.go
+@@ -0,0 +1,246 @@
++package magicsock
++
++import (
++	"context"
++	"errors"
++	"net"
++	"net/netip"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/sagernet/tailscale/health"
++	"github.com/sagernet/tailscale/net/netmon"
++	"github.com/sagernet/tailscale/util/eventbus"
++	"github.com/sagernet/tailscale/util/usermetric"
++)
++
++type recoveryListener struct {
++	fail4, fail6   atomic.Bool
++	calls4, calls6 atomic.Int32
++}
++
++func (l *recoveryListener) ListenPacket(ctx context.Context, network, _ string) (net.PacketConn, error) {
++	address, fail, calls := "127.0.0.1:0", &l.fail4, &l.calls4
++	if network == "udp6" {
++		address, fail, calls = "[::1]:0", &l.fail6, &l.calls6
++	}
++	calls.Add(1)
++	if fail.Load() {
++		return nil, errors.New("physical interface temporarily unavailable")
++	}
++	return (&net.ListenConfig{}).ListenPacket(ctx, network, address)
++}
++
++func recoveryConn(t *testing.T, listener *recoveryListener) *Conn {
++	t.Helper()
++	bus := eventbus.New()
++	t.Cleanup(bus.Close)
++	c, err := NewConn(Options{
++		Logf: t.Logf, EventBus: bus, NetMon: netmon.NewStatic(),
++		HealthTracker: health.NewTracker(bus), Metrics: new(usermetric.Registry),
++		DisablePortMapper: true, TestOnlyPacketListener: listener,
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	c.checkNetworkUpDuringTests = true
++	t.Cleanup(func() { c.Close() })
++	return c
++}
++
++func assertRecoveryDelivery(t *testing.T, c *Conn, network string) {
++	t.Helper()
++	address := "127.0.0.1:0"
++	if network == "udp6" {
++		address = "[::1]:0"
++	}
++	sink, err := net.ListenPacket(network, address)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer sink.Close()
++	payload := []byte("native bind recovery")
++	if n, err := c.sendUDPNetcheck(payload, sink.LocalAddr().(*net.UDPAddr).AddrPort()); err != nil || n != len(payload) {
++		t.Fatalf("send: %d, %v", n, err)
++	}
++	sink.SetReadDeadline(time.Now().Add(time.Second))
++	buffer := make([]byte, 64)
++	if n, _, err := sink.ReadFrom(buffer); err != nil || string(buffer[:n]) != string(payload) {
++		t.Fatalf("receive: %d, %v", n, err)
++	}
++}
++
++func TestBindRecoverySameNetwork(t *testing.T) {
++	listener := new(recoveryListener)
++	c := recoveryConn(t, listener)
++	listener.fail4.Store(true)
++	listener.fail6.Store(true)
++	if err := c.rebind(keepCurrentPort); err == nil {
++		t.Fatal("expected the transient bind failure")
++	}
++	listener.fail4.Store(false)
++	listener.fail6.Store(false)
++	state := c.netMon.InterfaceState()
++	delta, err := netmon.NewChangeDelta(state, state, 0, false)
++	if err != nil || delta.RebindLikelyRequired {
++		t.Fatalf("expected unchanged network state: %v, %v", delta, err)
++	}
++	// Allow the bounded first retry delay to expire. Like userspaceEngine's
++	// minor link-change path, call only ReSTUN, never an explicit Rebind.
++	time.Sleep(1100 * time.Millisecond)
++	c.ReSTUN("link-change-minor")
++	if c.LocalPort() == 0 {
++		t.Fatal("same-network recovery left the UDP transport unbound")
++	}
++	assertRecoveryDelivery(t, c, "udp4")
++	assertRecoveryDelivery(t, c, "udp6")
++}
++
++func retryDue(c *Conn) {
++	for _, ruc := range []*RebindingUDPConn{&c.pconn4, &c.pconn6} {
++		ruc.mu.Lock()
++		ruc.bindRetryAfter = time.Time{}
++		ruc.mu.Unlock()
++	}
++}
++
++func TestBindRecoveryStartupFailure(t *testing.T) {
++	listener := new(recoveryListener)
++	listener.fail4.Store(true)
++	listener.fail6.Store(true)
++	c := recoveryConn(t, listener)
++	if c.LocalPort() != 0 {
++		t.Fatal("expected an initially unbound socket")
++	}
++	if n, err := c.sendUDPNetcheck([]byte("lost"), netip.MustParseAddrPort("127.0.0.1:9")); n != 0 || err == nil {
++		t.Fatalf("failed bind must not report successful UDP writes: %d, %v", n, err)
++	}
++	listener.fail4.Store(false)
++	listener.fail6.Store(false)
++	retryDue(c)
++	c.ReSTUN("periodic")
++	assertRecoveryDelivery(t, c, "udp4")
++	assertRecoveryDelivery(t, c, "udp6")
++}
++
++func TestBindRecoveryPreservesHealthyFamily(t *testing.T) {
++	for _, late := range []string{"udp4", "udp6"} {
++		t.Run(late, func(t *testing.T) {
++			listener := new(recoveryListener)
++			fail := &listener.fail4
++			if late == "udp6" {
++				fail = &listener.fail6
++			}
++			fail.Store(true)
++			c := recoveryConn(t, listener)
++			healthy := &c.pconn6
++			if late == "udp6" {
++				healthy = &c.pconn4
++			}
++			original := healthy.currentConn()
++			port := healthy.Port()
++			fail.Store(false)
++			retryDue(c)
++			c.ReSTUN("link-change-minor")
++			if healthy.currentConn() != original || healthy.Port() != port {
++				t.Fatal("recovering one family disturbed the healthy socket")
++			}
++			assertRecoveryDelivery(t, c, "udp4")
++			assertRecoveryDelivery(t, c, "udp6")
++		})
++	}
++}
++
++func TestBindRecoveryBackoffAndNetworkDown(t *testing.T) {
++	listener := new(recoveryListener)
++	listener.fail4.Store(true)
++	listener.fail6.Store(true)
++	c := recoveryConn(t, listener)
++	for _, want := range []time.Duration{2, 4, 8, 16, 30, 30} {
++		retryDue(c)
++		c.retryUnboundSockets()
++		c.pconn4.mu.Lock()
++		got := c.pconn4.bindRetryDelay
++		c.pconn4.mu.Unlock()
++		if got != want*time.Second {
++			t.Fatalf("retry delay = %v; want %v", got, want*time.Second)
++		}
++		before := listener.calls4.Load() + listener.calls6.Load()
++		for range 20 {
++			c.retryUnboundSockets()
++		}
++		if after := listener.calls4.Load() + listener.calls6.Load(); after != before {
++			t.Fatal("repeated discovery bypassed the retry deadline")
++		}
++	}
++	c.SetNetworkUp(false)
++	retryDue(c)
++	before := listener.calls4.Load() + listener.calls6.Load()
++	c.retryUnboundSockets()
++	if after := listener.calls4.Load() + listener.calls6.Load(); after != before {
++		t.Fatal("retried while the network was down")
++	}
++}
++
++func TestBindRecoveryDoesNotReopenClosedBind(t *testing.T) {
++	listener := new(recoveryListener)
++	listener.fail4.Store(true)
++	listener.fail6.Store(true)
++	c := recoveryConn(t, listener)
++	c.pconn4.Close()
++	c.pconn6.Close()
++	retryDue(c)
++	listener.fail4.Store(false)
++	listener.fail6.Store(false)
++	before := listener.calls4.Load() + listener.calls6.Load()
++	c.retryUnboundSockets()
++	if after := listener.calls4.Load() + listener.calls6.Load(); after != before {
++		t.Fatal("reopened explicitly closed sockets")
++	}
++}
++
++func TestBindRecoveryConcurrentClose(t *testing.T) {
++	listener := new(recoveryListener)
++	listener.fail4.Store(true)
++	listener.fail6.Store(true)
++	c := recoveryConn(t, listener)
++	listener.fail4.Store(false)
++	listener.fail6.Store(false)
++	retryDue(c)
++	var wg sync.WaitGroup
++	for range 8 {
++		wg.Go(func() {
++			for range 10 {
++				c.ReSTUN("link-change-minor")
++			}
++		})
++	}
++	c.Close()
++	wg.Wait()
++	before := listener.calls4.Load() + listener.calls6.Load()
++	c.ReSTUN("after-close")
++	if after := listener.calls4.Load() + listener.calls6.Load(); after != before {
++		t.Fatal("opened sockets after connection close")
++	}
++	if c.pconn4.Port() != 0 || c.pconn6.Port() != 0 {
++		t.Fatal("close left a recovered socket open")
++	}
++}
++
++func TestBindRecoveryLeavesDisabledUDPAlone(t *testing.T) {
++	listener := new(recoveryListener)
++	c := recoveryConn(t, listener)
++	for _, ruc := range []*RebindingUDPConn{&c.pconn4, &c.pconn6} {
++		ruc.mu.Lock()
++		ruc.closeLocked()
++		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
++		ruc.mu.Unlock()
++	}
++	before := listener.calls4.Load() + listener.calls6.Load()
++	c.retryUnboundSockets()
++	if after := listener.calls4.Load() + listener.calls6.Load(); after != before {
++		t.Fatal("retried an intentionally disabled socket")
++	}
++}
+diff --git a/wgengine/magicsock/blockforever_conn.go b/wgengine/magicsock/blockforever_conn.go
+index 23a9c90c1..78a77aede 100644
+--- a/wgengine/magicsock/blockforever_conn.go
++++ b/wgengine/magicsock/blockforever_conn.go
+@@ -19,6 +19,9 @@ type blockForeverConn struct {
+ 	mu     syncs.Mutex
+ 	cond   *sync.Cond
+ 	closed bool
++	// Non-nil only for failed binds, not intentionally disabled UDP.
++	// Immutable after the connection is published.
++	writeErr error
+ }
+ 
+ func (c *blockForeverConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.AddrPort, err error) {
+@@ -31,6 +34,9 @@ func (c *blockForeverConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.Addr
+ }
+ 
+ func (c *blockForeverConn) WriteToUDPAddrPort(p []byte, addr netip.AddrPort) (int, error) {
++	if c.writeErr != nil {
++		return 0, c.writeErr
++	}
+ 	// Silently drop writes.
+ 	return len(p), nil
+ }
+diff --git a/wgengine/magicsock/magicsock.go b/wgengine/magicsock/magicsock.go
+index 64be76523..95c3bb023 100644
+--- a/wgengine/magicsock/magicsock.go
++++ b/wgengine/magicsock/magicsock.go
+@@ -3695,6 +3695,10 @@ func (c *Conn) onPortMapChanged(portmappertype.Mapping) { c.ReSTUN("portmap-chan
+ // If Conn.staticEndpoints have been updated, calling ReSTUN will also result in
+ // the new endpoints being advertised.
+ func (c *Conn) ReSTUN(why string) {
++	// A minor/same-state link notification does not request Rebind. Repair
++	// failed sockets before discovery instead of probing through a placeholder
++	// forever. This must run without c.mu (PMTUD can acquire it).
++	c.retryUnboundSockets()
+ 	c.mu.Lock()
+ 	defer c.mu.Unlock()
+ 	if c.closed {
+@@ -3764,14 +3768,25 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
+ 	// from the perspective of ruc receive functions.
+ 	ruc.mu.Lock()
+ 	defer ruc.mu.Unlock()
++	return c.bindSocketLocked(ruc, network, curPortFate)
++}
++
++// bindSocketLocked requires ruc.mu. It is shared by ordinary rebinds and the
++// failed-socket retry path so a concurrent close/rebind cannot be overtaken.
++func (c *Conn) bindSocketLocked(ruc *RebindingUDPConn, network string, curPortFate currentPortFate) error {
++	if c.closing.Load() {
++		return net.ErrClosed
++	}
+ 
+ 	if runtime.GOOS == "js" {
++		ruc.clearBindFailureLocked()
+ 		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
+ 		return nil
+ 	}
+ 
+ 	if debugAlwaysDERP() {
+ 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
++		ruc.clearBindFailureLocked()
+ 		ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
+ 		return nil
+ 	}
+@@ -3797,6 +3812,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
+ 	}
+ 
+ 	var pconn nettype.PacketConn
++	var lastErr error
+ 	for _, port := range ports {
+ 		// Close the existing conn, in case it is sitting on the port we want.
+ 		err := ruc.closeLocked()
+@@ -3806,6 +3822,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
+ 		// Open a new one with the desired port.
+ 		pconn, err = c.listenPacket(network, port)
+ 		if err != nil {
++			lastErr = err
+ 			c.logf("magicsock: unable to bind %v port %d: %v", network, port, err)
+ 			continue
+ 		}
+@@ -3832,6 +3849,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
+ 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
+ 		}
+ 		ruc.setConnLocked(pconn, network, c.bind.BatchSize(), c.controlKnobs)
++		ruc.clearBindFailureLocked()
+ 		if network == "udp4" {
+ 			c.health.SetUDP4Unbound(false)
+ 		}
+@@ -3840,13 +3858,17 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
+ 
+ 	// Failed to bind, including on port 0 (!).
+ 	// Set pconn to a dummy conn whose reads block until closed.
+-	// This keeps the receive funcs alive for a future in which
+-	// we get a link change and we can try binding again.
+-	ruc.setConnLocked(newBlockForeverConn(), "", c.bind.BatchSize(), c.controlKnobs)
++	// Keep receive funcs alive, but do not report successful writes. The next
++	// eligible endpoint-discovery pass retries only this failed socket.
++	err := fmt.Errorf("failed to bind any ports (tried %v): %w", ports, lastErr)
++	dummy := newBlockForeverConn()
++	dummy.writeErr = err
++	ruc.setConnLocked(dummy, "", c.bind.BatchSize(), c.controlKnobs)
++	ruc.noteBindFailureLocked(err, time.Now())
+ 	if network == "udp4" {
+ 		c.health.SetUDP4Unbound(true)
+ 	}
+-	return fmt.Errorf("failed to bind any ports (tried %v)", ports)
++	return err
+ }
+ 
+ type currentPortFate uint8
+diff --git a/wgengine/magicsock/rebinding_conn.go b/wgengine/magicsock/rebinding_conn.go
+index 1120972d0..a5527494f 100644
+--- a/wgengine/magicsock/rebinding_conn.go
++++ b/wgengine/magicsock/rebinding_conn.go
+@@ -10,6 +10,7 @@
+ 	"net/netip"
+ 	"sync/atomic"
+ 	"syscall"
++	"time"
+ 
+ 	"github.com/sagernet/tailscale/control/controlknobs"
+ 	"github.com/sagernet/tailscale/net/batching"
+@@ -35,6 +36,12 @@ type RebindingUDPConn struct {
+ 	mu    syncs.Mutex // held while changing pconn (and pconnAtomic)
+ 	pconn nettype.PacketConn
+ 	port  uint16
++
++	// A failed bind is different from an intentionally disabled or closed
++	// socket. Recovery is driven by ReSTUN and serialized by mu.
++	bindErr        error
++	bindRetryDelay time.Duration
++	bindRetryAfter time.Time
+ }
+ 
+ // setConnLocked sets the provided nettype.PacketConn. It should be called only
+@@ -163,5 +170,6 @@ func (c *RebindingUDPConn) localAddrLocked() *net.UDPAddr {
+ func (c *RebindingUDPConn) Close() error {
+ 	c.mu.Lock()
+ 	defer c.mu.Unlock()
++	c.clearBindFailureLocked()
+ 	return c.closeLocked()
+ }
