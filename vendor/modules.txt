@@ -455,99 +455,99 @@ github.com/sagernet/bbolt/internal/freelist
 # github.com/sagernet/cors v1.2.1
 ## explicit; go 1.14
 github.com/sagernet/cors
-# github.com/sagernet/cronet-go v0.0.0-20260912104727-0d28acc44093
+# github.com/sagernet/cronet-go v0.0.0-20260929213745-4d18a60dc3a8
 ## explicit; go 1.24.0
 github.com/sagernet/cronet-go
 github.com/sagernet/cronet-go/include
 github.com/sagernet/cronet-go/internal/cronet
-# github.com/sagernet/cronet-go/all v0.0.0-20260912104727-0d28acc44093
+# github.com/sagernet/cronet-go/all v0.0.0-20260929213745-4d18a60dc3a8
 ## explicit; go 1.24.0
 github.com/sagernet/cronet-go/all
-# github.com/sagernet/cronet-go/lib/android_386 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/android_386 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/android_386
-# github.com/sagernet/cronet-go/lib/android_amd64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/android_amd64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/android_amd64
-# github.com/sagernet/cronet-go/lib/android_arm v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/android_arm v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/android_arm
-# github.com/sagernet/cronet-go/lib/android_arm64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/android_arm64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/android_arm64
-# github.com/sagernet/cronet-go/lib/darwin_amd64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/darwin_amd64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/darwin_amd64
-# github.com/sagernet/cronet-go/lib/darwin_arm64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/darwin_arm64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/darwin_arm64
-# github.com/sagernet/cronet-go/lib/ios_amd64_simulator v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/ios_amd64_simulator v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/ios_amd64_simulator
-# github.com/sagernet/cronet-go/lib/ios_arm64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/ios_arm64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/ios_arm64
-# github.com/sagernet/cronet-go/lib/ios_arm64_simulator v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/ios_arm64_simulator v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/ios_arm64_simulator
-# github.com/sagernet/cronet-go/lib/linux_386 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_386 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_386
-# github.com/sagernet/cronet-go/lib/linux_386_musl v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_386_musl v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_386_musl
-# github.com/sagernet/cronet-go/lib/linux_amd64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_amd64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_amd64
-# github.com/sagernet/cronet-go/lib/linux_amd64_musl v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_amd64_musl v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_amd64_musl
-# github.com/sagernet/cronet-go/lib/linux_arm v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_arm v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_arm
-# github.com/sagernet/cronet-go/lib/linux_arm64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_arm64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_arm64
-# github.com/sagernet/cronet-go/lib/linux_arm64_musl v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_arm64_musl v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_arm64_musl
-# github.com/sagernet/cronet-go/lib/linux_arm_musl v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_arm_musl v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_arm_musl
-# github.com/sagernet/cronet-go/lib/linux_loong64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_loong64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_loong64
-# github.com/sagernet/cronet-go/lib/linux_loong64_musl v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_loong64_musl v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_loong64_musl
-# github.com/sagernet/cronet-go/lib/linux_mips64le v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_mips64le v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_mips64le
-# github.com/sagernet/cronet-go/lib/linux_mipsle v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_mipsle v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_mipsle
-# github.com/sagernet/cronet-go/lib/linux_mipsle_musl v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_mipsle_musl v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_mipsle_musl
-# github.com/sagernet/cronet-go/lib/linux_riscv64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_riscv64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_riscv64
-# github.com/sagernet/cronet-go/lib/linux_riscv64_musl v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/linux_riscv64_musl v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/linux_riscv64_musl
-# github.com/sagernet/cronet-go/lib/tvos_amd64_simulator v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/tvos_amd64_simulator v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/tvos_amd64_simulator
-# github.com/sagernet/cronet-go/lib/tvos_arm64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/tvos_arm64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/tvos_arm64
-# github.com/sagernet/cronet-go/lib/tvos_arm64_simulator v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/tvos_arm64_simulator v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/tvos_arm64_simulator
-# github.com/sagernet/cronet-go/lib/windows_amd64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/windows_amd64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/windows_amd64
-# github.com/sagernet/cronet-go/lib/windows_arm64 v0.0.0-20260912104006-c10c03c318db
+# github.com/sagernet/cronet-go/lib/windows_arm64 v0.0.0-20260929213014-a1cafd93eb1f
 ## explicit; go 1.20
 github.com/sagernet/cronet-go/lib/windows_arm64
 # github.com/sagernet/fswatch v0.1.2
@@ -623,7 +623,7 @@ github.com/sagernet/nftables/expr
 github.com/sagernet/nftables/internal/parseexprfunc
 github.com/sagernet/nftables/userdata
 github.com/sagernet/nftables/xt
-# github.com/sagernet/quic-go v0.61.0-sing-box-mod.7
+# github.com/sagernet/quic-go v0.61.0-sing-box-mod.9
 ## explicit; go 1.25.0
 github.com/sagernet/quic-go
 github.com/sagernet/quic-go/congestion
@@ -645,7 +645,7 @@ github.com/sagernet/quic-go/qlog
 github.com/sagernet/quic-go/qlogwriter
 github.com/sagernet/quic-go/qlogwriter/jsontext
 github.com/sagernet/quic-go/quicvarint
-# github.com/sagernet/sing v0.9.5-0.20260917164122-8fc5da509c10
+# github.com/sagernet/sing v0.9.7-0.20260929150544-6f21f2425a95
 ## explicit; go 1.25.0
 github.com/sagernet/sing/common
 github.com/sagernet/sing/common/abx
@@ -701,17 +701,16 @@ github.com/sagernet/sing/common/x/linkedhashmap
 github.com/sagernet/sing/common/x/list
 github.com/sagernet/sing/contrab/freelru
 github.com/sagernet/sing/contrab/maphash
-github.com/sagernet/sing/protocol/http
 github.com/sagernet/sing/protocol/socks
 github.com/sagernet/sing/protocol/socks/socks4
 github.com/sagernet/sing/protocol/socks/socks5
 github.com/sagernet/sing/service
 github.com/sagernet/sing/service/filemanager
 github.com/sagernet/sing/service/pause
-# github.com/sagernet/sing-anytls v0.0.0-20260904135308-cec2d74334be
+# github.com/sagernet/sing-anytls v0.0.0-20260928104022-580984e4d8cb
 ## explicit; go 1.24.0
 github.com/sagernet/sing-anytls
-# github.com/sagernet/sing-cloudflared v0.1.3-0.20260706062323-d9787e794aa3
+# github.com/sagernet/sing-cloudflared v0.1.4-0.20260929150702-b3a1e8f3018c
 ## explicit; go 1.24.7
 github.com/sagernet/sing-cloudflared
 github.com/sagernet/sing-cloudflared/internal/config
@@ -722,17 +721,17 @@ github.com/sagernet/sing-cloudflared/internal/icmp
 github.com/sagernet/sing-cloudflared/internal/protocol
 github.com/sagernet/sing-cloudflared/internal/transport
 github.com/sagernet/sing-cloudflared/internal/tunnelrpc
-# github.com/sagernet/sing-mux v0.3.7-0.20260905054442-91d1502591ce
-## explicit; go 1.18
+# github.com/sagernet/sing-mux v0.3.10-0.20260929204512-caf09fe32475
+## explicit; go 1.25.0
 github.com/sagernet/sing-mux
-# github.com/sagernet/sing-openconnect v0.0.0-20260903200519-8b89c968949d
+# github.com/sagernet/sing-openconnect v0.1.1-0.20260929151226-29757281a247
 ## explicit; go 1.24.0
 github.com/sagernet/sing-openconnect
-# github.com/sagernet/sing-openvpn v0.0.0-20260903200517-e060dda5b1f1
+# github.com/sagernet/sing-openvpn v0.1.1-0.20260929151220-f330676d6d4a
 ## explicit; go 1.24.0
 github.com/sagernet/sing-openvpn
 github.com/sagernet/sing-openvpn/proto
-# github.com/sagernet/sing-quic v0.7.1-0.20260904135313-497364e8ee3e
+# github.com/sagernet/sing-quic v0.7.2-0.20260929204512-e702a73535d5
 ## explicit; go 1.25.0
 github.com/sagernet/sing-quic
 github.com/sagernet/sing-quic/congestion_meta1
@@ -744,12 +743,12 @@ github.com/sagernet/sing-quic/hysteria2/internal/protocol
 github.com/sagernet/sing-quic/hysteria2/internal/stun
 github.com/sagernet/sing-quic/hysteria2/realm
 github.com/sagernet/sing-quic/tuic
-# github.com/sagernet/sing-shadowsocks v0.2.8
+# github.com/sagernet/sing-shadowsocks v0.2.9-0.20260929204512-65740e0f0e3e
 ## explicit; go 1.18
 github.com/sagernet/sing-shadowsocks
 github.com/sagernet/sing-shadowsocks/shadowaead
 github.com/sagernet/sing-shadowsocks/shadowaead_2022
-# github.com/sagernet/sing-shadowsocks2 v0.2.1
+# github.com/sagernet/sing-shadowsocks2 v0.2.2-0.20260929152114-a69d1086332b
 ## explicit; go 1.18
 github.com/sagernet/sing-shadowsocks2
 github.com/sagernet/sing-shadowsocks2/cipher
@@ -758,7 +757,7 @@ github.com/sagernet/sing-shadowsocks2/internal/shadowio
 github.com/sagernet/sing-shadowsocks2/shadowaead
 github.com/sagernet/sing-shadowsocks2/shadowaead_2022
 github.com/sagernet/sing-shadowsocks2/shadowstream
-# github.com/sagernet/sing-shadowtls v0.2.1
+# github.com/sagernet/sing-shadowtls v0.2.2-0.20260928201441-a9c0127d5c99
 ## explicit; go 1.20
 github.com/sagernet/sing-shadowtls
 # github.com/sagernet/sing-snell v0.0.0-20260904135315-bc5a12ac736f
@@ -768,7 +767,7 @@ github.com/sagernet/sing-snell/internal/reuse
 github.com/sagernet/sing-snell/snellv4
 github.com/sagernet/sing-snell/snellv5
 github.com/sagernet/sing-snell/snellv6
-# github.com/sagernet/sing-tun v0.9.4-0.20260917142847-fbc0c3dff312
+# github.com/sagernet/sing-tun v0.9.7-0.20260929152201-837976228ca2
 ## explicit; go 1.25.0
 github.com/sagernet/sing-tun
 github.com/sagernet/sing-tun/gtcpip
@@ -794,7 +793,7 @@ github.com/sagernet/sing-usbip/internal/usbipvhci
 github.com/sagernet/sing-usbip/internal/vboxusb
 github.com/sagernet/sing-usbip/internal/wincfgmgr32
 github.com/sagernet/sing-usbip/internal/winsetupapi
-# github.com/sagernet/sing-vmess v0.2.8
+# github.com/sagernet/sing-vmess v0.2.9-0.20260929152519-9b95ab8c9478
 ## explicit; go 1.20
 github.com/sagernet/sing-vmess
 github.com/sagernet/sing-vmess/packetaddr
@@ -802,7 +801,7 @@ github.com/sagernet/sing-vmess/vless
 # github.com/sagernet/smux v1.5.50-sing-box-mod.1
 ## explicit; go 1.18
 github.com/sagernet/smux
-# github.com/sagernet/tailscale v1.102.1-sing-box-1.14-mod.5.0.20260916060041-a8fbeb4b0838 => ./.vendor-work/tailscale
+# github.com/sagernet/tailscale v1.102.1-sing-box-1.14-mod.5.0.20260925112514-35e61219dedd => ./.vendor-work/tailscale
 ## explicit; go 1.25.5
 github.com/sagernet/tailscale
 github.com/sagernet/tailscale/appc
@@ -1028,7 +1027,7 @@ github.com/sagernet/tailscale/wgengine/wgcfg
 github.com/sagernet/tailscale/wgengine/wgint
 github.com/sagernet/tailscale/wgengine/wglog
 github.com/sagernet/tailscale/wgengine/winnet
-# github.com/sagernet/wireguard-go v0.0.8-0.20260917055437-bc6039037038
+# github.com/sagernet/wireguard-go v0.0.8-0.20260929150556-ca3bc60c4ce7
 ## explicit; go 1.25
 github.com/sagernet/wireguard-go/conn
 github.com/sagernet/wireguard-go/conn/winrio

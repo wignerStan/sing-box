@@ -224,11 +224,14 @@ func (s *ncSession) startInitialESP() *espChannel {
 	}
 	s.access.RLock()
 	configuration := s.configuration
+	var espConfiguration *ncESPConfiguration
+	if configuration != nil {
+		espConfiguration = configuration.esp
+	}
 	s.access.RUnlock()
-	if configuration == nil || configuration.esp == nil || configuration.esp.keys == nil {
+	if espConfiguration == nil || espConfiguration.keys == nil {
 		return nil
 	}
-	espConfiguration := configuration.esp
 	channel, err := newESPChannel(s.ctx, espChannelConfig{
 		Dialer:          s.client.options.Dialer,
 		Remote:          espConfiguration.remote,
@@ -341,15 +344,18 @@ func (s *ncSession) fallbackFromESP(channel *espChannel, channelErr error) error
 func (s *ncSession) handleESPRekey(payload []byte) error {
 	s.access.RLock()
 	configuration := s.configuration
+	var espConfiguration *ncESPConfiguration
+	if configuration != nil {
+		espConfiguration = configuration.esp
+	}
 	channel := s.esp
 	s.access.RUnlock()
-	if configuration == nil || configuration.esp == nil || configuration.esp.keys == nil || channel == nil {
+	if espConfiguration == nil || espConfiguration.keys == nil || channel == nil {
 		if s.client.options.Logger != nil {
 			s.client.options.Logger.DebugContext(s.ctx, "Ignoring Network Connect ESP KMP 302 without an active ESP channel")
 		}
 		return nil
 	}
-	espConfiguration := configuration.esp
 	compression := byte(0)
 	if espConfiguration.compression {
 		compression = 1

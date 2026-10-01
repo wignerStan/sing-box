@@ -5,4 +5,4 @@ package linux_loong64
 // #cgo LDFLAGS: -L${SRCDIR} -l:libcronet.a -ldl -lpthread -lrt -lm -lresolv
 import "C"
 
-const Version = "150.0.7871.63"
+const Version = "154.0.8037.49"

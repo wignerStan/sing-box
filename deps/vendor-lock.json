@@ -58,17 +58,22 @@
           "order": 2,
           "path": "patches/tailscale/0002-cgnat-direct-udp.patch",
           "sha256": "f1ac39a3870ce2545c435aaff0b7c7d1e2e3f5aadb697bf793b24b072010914a"
+        },
+        {
+          "order": 3,
+          "path": "patches/tailscale/0003-udp-bind-recovery.patch",
+          "sha256": "eecf1d75a2b7a874d765964cdbe7748a787cfa3d7a42307513b9c4c9faa248bd"
         }
       ],
-      "result_tree": "b827a625a6d9119f69337876375a13f55b61f6eb",
+      "result_tree": "415894e6cc875a159bf5ddb513205e88032d9c44",
       "source": {
-        "commit": "a8fbeb4b0838c69e383e52b08228366f855d2261",
+        "commit": "35e61219deddbf10d8ab8eab86df59c4d62313ea",
         "path": "third_party/tailscale"
       }
     }
   ],
   "projection": {
-    "entries": 9026,
+    "entries": 9031,
     "excluded_repository_metadata": [
       {
         "kind": "file",
@@ -654,9 +659,9 @@
       }
     ],
     "format": "go-mod-vendor",
-    "modules_txt_sha256": "8f6d4d44cdefa35160a24a3341f2ef2b97ad9d9d3f5d97f8b7930fe03b9a14f2",
+    "modules_txt_sha256": "d92b4576a50749ad9e953e24af68646e84012af3a4d7280b5fbbf807b4466c7d",
     "path": "vendor",
-    "tree_sha256": "9dcaf2dc3ebbd75f3198780516e1409833010933a416db36f025648e8be2276d"
+    "tree_sha256": "d581526c02280cfea34e938b66e38030f979674591ee87565463e3cdbb7338ed"
   },
   "schema_version": "sing-box-vendor-lock/v2"
 }

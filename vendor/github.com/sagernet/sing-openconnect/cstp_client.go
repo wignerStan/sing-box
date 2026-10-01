@@ -469,6 +469,15 @@ func parseCSTPResponse(
 			return result, E.New("CSTP server did not provide an IPv4 tunnel address")
 		}
 	}
+	minimumMTU := 576
+	if slices.ContainsFunc(result.Configuration.Addresses, func(prefix netip.Prefix) bool {
+		return prefix.Addr().Is6()
+	}) {
+		minimumMTU = 1280
+	}
+	if mtu < minimumMTU {
+		return result, E.New("invalid CSTP tunnel MTU: ", mtu)
+	}
 	result.Configuration.Routes, err = parseCSTPRoutes(headers.Values("X-CSTP-Split-Include"), headers.Values("X-CSTP-Split-Include-IP6"))
 	if err != nil {
 		return result, err

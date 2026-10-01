@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/sagernet/tailscale/control/controlknobs"
 	"github.com/sagernet/tailscale/net/batching"
@@ -35,6 +36,12 @@ type RebindingUDPConn struct {
 	mu    syncs.Mutex // held while changing pconn (and pconnAtomic)
 	pconn nettype.PacketConn
 	port  uint16
+
+	// A failed bind is different from an intentionally disabled or closed
+	// socket. Recovery is driven by ReSTUN and serialized by mu.
+	bindErr        error
+	bindRetryDelay time.Duration
+	bindRetryAfter time.Time
 }
 
 // setConnLocked sets the provided nettype.PacketConn. It should be called only
@@ -163,6 +170,7 @@ var errNilPConn = errors.New("nil pconn")
 func (c *RebindingUDPConn) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.clearBindFailureLocked()
 	return c.closeLocked()
 }
 

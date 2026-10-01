@@ -50,6 +50,7 @@ jobs:
           set -euxo pipefail
           (cd .vendor-work/dae/ebpfinbound && go test -race -count=1 ./... && go vet ./...)
           (cd .vendor-work/tailscale && go test -race -count=1 ./tsnet ./net/netmon ./util/linuxfw && go vet ./tsnet ./net/netmon ./util/linuxfw)
+          (cd .vendor-work/tailscale && go test -race -run '^TestBindRecovery' -count=10 ./wgengine/magicsock && go vet ./wgengine/magicsock)
       - name: Test real Tailscale firewall behavior
         run: |
           set -euxo pipefail

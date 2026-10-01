@@ -60,12 +60,6 @@ type Client struct {
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
-	if options.Password == "" {
-		return nil, ErrMissingPassword
-	}
-	if options.DialOut == nil {
-		return nil, ErrMissingDialer
-	}
 	factory, err := newPaddingFactory(DefaultPaddingScheme)
 	if err != nil {
 		return nil, err
@@ -242,14 +236,14 @@ func (c *Client) CloseIdleConnections() {
 		return
 	}
 	var closing []*session
-	for idle := range c.sessions {
+	for element := c.idleSessions.Front(); element != nil; {
+		idle := element.Value
+		element = element.Next()
 		if idle.hasStreams() {
 			continue
 		}
-		if idle.element != nil {
-			c.idleSessions.Remove(idle.element)
-			idle.element = nil
-		}
+		c.idleSessions.Remove(idle.element)
+		idle.element = nil
 		delete(c.sessions, idle)
 		closing = append(closing, idle)
 	}
