@@ -16,6 +16,7 @@ import (
 	"github.com/sagernet/sing-box/route"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
+
 	"golang.org/x/sys/unix"
 )
 
