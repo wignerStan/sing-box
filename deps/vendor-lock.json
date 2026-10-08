@@ -661,7 +661,7 @@
     "format": "go-mod-vendor",
     "modules_txt_sha256": "d92b4576a50749ad9e953e24af68646e84012af3a4d7280b5fbbf807b4466c7d",
     "path": "vendor",
-    "tree_sha256": "d581526c02280cfea34e938b66e38030f979674591ee87565463e3cdbb7338ed"
+    "tree_sha256": "8041616993dec5d9abd459e0c389b24617be62bfcdb7616a2eb6e46de7a782c7"
   },
   "schema_version": "sing-box-vendor-lock/v2"
 }

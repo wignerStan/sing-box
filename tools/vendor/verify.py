@@ -85,10 +85,13 @@ def tree_sha256(root: Path, *, excluded: Iterable[str] = ()) -> tuple[str, int]:
             item_sha = hashlib.sha256(encoded_target).hexdigest()
             size = len(encoded_target)
         elif path.is_dir():
+            mode = 0o755
             kind = "directory"
             item_sha = None
             size = 0
         elif path.is_file():
+            # Git retains executable bits, but not umask-dependent write bits.
+            mode = 0o755 if mode & 0o111 else 0o644
             kind = "file"
             item_sha = file_sha256(path)
             size = info.st_size
