@@ -10,12 +10,14 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
-	utls "github.com/metacubex/utls"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+
+	utls "github.com/metacubex/utls"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,4 +98,5 @@ func TestRealityClientPreservesChromeKeyShares(t *testing.T) {
 	require.Contains(t, curves, uint16(utls.X25519MLKEM768))
 	require.Contains(t, shares, uint16(utls.X25519MLKEM768))
 	require.Contains(t, shares, uint16(utls.X25519))
+	require.Less(t, slices.Index(shares, uint16(utls.X25519MLKEM768)), slices.Index(shares, uint16(utls.X25519)))
 }
