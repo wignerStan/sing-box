@@ -1,12 +1,12 @@
 name: Vendor-authoritative release
 on:
   push:
-    branches: [release/v1.14.0-wigner.1]
+    branches: [release/v1.14.2-wigner.1]
 permissions:
   contents: write
 env:
-  RELEASE_TAG: v1.14.0-wigner.1
-  PRODUCT_TAGS: with_dae,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
+  RELEASE_TAG: v1.14.2-wigner.1
+  PRODUCT_TAGS: with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
 jobs:
   product:
     strategy:
@@ -25,7 +25,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version: '1.27.x'
           cache: false
       - name: Verify tracked release source and build
         env:
@@ -36,12 +36,14 @@ jobs:
         run: |
           set -euxo pipefail
           python3 tools/vendor/verify.py
+          go test -mod=vendor -race -tags "$PRODUCT_TAGS" -count=1 ./common/tls ./protocol/dae ./protocol/tailscale ./protocol/tun
+          go vet -mod=vendor -tags "$PRODUCT_TAGS" ./common/tls ./protocol/dae ./protocol/tailscale ./protocol/tun
           os=${TARGET%-*}
           arch=${TARGET#*-}
           version=${RELEASE_TAG#v}
           package="$RUNNER_TEMP/package"
           mkdir -p "$package"
-          CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -mod=vendor -trimpath -tags "$PRODUCT_TAGS" -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$package/sing-box" ./cmd/sing-box
+          CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -mod=vendor -trimpath -buildvcs=false -tags "$PRODUCT_TAGS" -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$package/sing-box" ./cmd/sing-box
           chmod +x "$package/sing-box"
           "$package/sing-box" version
           git rev-parse HEAD > "$package/SOURCE_COMMIT"
@@ -55,38 +57,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  backport:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
-        with:
-          submodules: recursive
-          persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.x'
-          cache: false
-      - name: Build standalone Tailscale 1.94.2 peer
-        run: |
-          set -euxo pipefail
-          work="$RUNNER_TEMP/tailscale-1.94.2"
-          package="$RUNNER_TEMP/backport-package"
-          python3 tools/vendor/materialize_backport.py --output "$work"
-          mkdir -p "$package"
-          (cd "$work" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o "$package/tailscale" ./cmd/tailscale)
-          (cd "$work" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o "$package/tailscaled" ./cmd/tailscaled)
-          cp "$work/.sing-box-backport-tree" "$package/PATCHED_TREE"
-          cp deps/tailscale-1.94.2-lock.json "$package/BACKPORT_LOCK.json"
-          (cd "$package" && sha256sum tailscale tailscaled PATCHED_TREE BACKPORT_LOCK.json > SHA256SUMS)
-          tar -C "$package" -czf "$RUNNER_TEMP/tailscale-v1.94.2-cgnat-wigner.1-linux-amd64.tar.gz" .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tailscale-v1.94.2-cgnat-wigner.1-linux-amd64
-          path: ${{ runner.temp }}/tailscale-v1.94.2-cgnat-wigner.1-linux-amd64.tar.gz
-          if-no-files-found: error
-          retention-days: 30
-
   source:
     runs-on: ubuntu-24.04
     steps:
@@ -95,7 +65,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version: '1.27.x'
           cache: false
       - name: Verify and archive tracked release source
         env:
@@ -118,7 +88,7 @@ jobs:
           retention-days: 30
 
   release:
-    needs: [product, backport, source]
+    needs: [product, source]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
