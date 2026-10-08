@@ -43,14 +43,16 @@ jobs:
         run: |
           set -euxo pipefail
           python3 tools/vendor/verify.py
+          PRODUCT_PACKAGES="./common/tls ./protocol/tailscale ./protocol/tun"
           if [ "${TARGET%-*}" = linux ]; then
+            PRODUCT_PACKAGES="$PRODUCT_PACKAGES ./protocol/dae"
             PRODUCT_TAGS="with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
             LDFLAGS="$(cat release/LDFLAGS)"
           else
             LDFLAGS=""
           fi
-          go test -mod=vendor -race -tags "$PRODUCT_TAGS" -count=1 ./common/tls ./protocol/dae ./protocol/tailscale ./protocol/tun
-          go vet -mod=vendor -tags "$PRODUCT_TAGS" ./common/tls ./protocol/dae ./protocol/tailscale ./protocol/tun
+          go test -mod=vendor -race -tags "$PRODUCT_TAGS" -count=1 $PRODUCT_PACKAGES
+          go vet -mod=vendor -tags "$PRODUCT_TAGS" $PRODUCT_PACKAGES
           os=${TARGET%-*}
           arch=${TARGET#*-}
           version=${RELEASE_TAG#v}
