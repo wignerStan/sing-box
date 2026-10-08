@@ -11,6 +11,36 @@ import verify
 
 
 class VendorDigestPortabilityTests(unittest.TestCase):
+    def test_umask_and_readonly_modes_do_not_change_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = root / "package"
+            directory.mkdir()
+            source = directory / "source.go"
+            source.write_text("package fixture\n")
+            directory.chmod(0o775)
+            source.chmod(0o664)
+            first, _ = materialize.tree_digest(root)
+            directory.chmod(0o755)
+            source.chmod(0o444)
+            second, _ = materialize.tree_digest(root)
+            verified, _ = verify.tree_sha256(root)
+            self.assertEqual(first, second)
+            self.assertEqual(second, verified)
+
+    def test_executable_mode_remains_part_of_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "tool.sh"
+            source.write_text("#!/bin/sh\n")
+            source.chmod(0o644)
+            first, _ = materialize.tree_digest(root)
+            source.chmod(0o755)
+            second, _ = materialize.tree_digest(root)
+            verified, _ = verify.tree_sha256(root)
+            self.assertNotEqual(first, second)
+            self.assertEqual(second, verified)
+
     def test_symlink_mode_is_canonical(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -119,10 +119,13 @@ def tree_digest(
             content_sha256 = hashlib.sha256(encoded_target).hexdigest()
             size = len(encoded_target)
         elif path.is_dir():
+            mode = 0o755
             kind = "directory"
             content_sha256 = None
             size = 0
         elif path.is_file():
+            # Git retains executable bits, but not umask-dependent write bits.
+            mode = 0o755 if mode & 0o111 else 0o644
             kind = "file"
             content_sha256 = sha256_file(path)
             size = info.st_size
