@@ -8,6 +8,13 @@ env:
   RELEASE_TAG: v1.14.2-wigner.1
   PRODUCT_TAGS: with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
 jobs:
+  tests:
+    uses: ./.github/workflows/test.yml
+  lint:
+    uses: ./.github/workflows/lint.yml
+  integrity:
+    uses: ./.github/workflows/vendor-integrity.yml
+
   product:
     strategy:
       fail-fast: false
@@ -36,6 +43,12 @@ jobs:
         run: |
           set -euxo pipefail
           python3 tools/vendor/verify.py
+          if [ "${TARGET%-*}" = linux ]; then
+            PRODUCT_TAGS="with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+            LDFLAGS="$(cat release/LDFLAGS)"
+          else
+            LDFLAGS=""
+          fi
           go test -mod=vendor -race -tags "$PRODUCT_TAGS" -count=1 ./common/tls ./protocol/dae ./protocol/tailscale ./protocol/tun
           go vet -mod=vendor -tags "$PRODUCT_TAGS" ./common/tls ./protocol/dae ./protocol/tailscale ./protocol/tun
           os=${TARGET%-*}
@@ -43,7 +56,7 @@ jobs:
           version=${RELEASE_TAG#v}
           package="$RUNNER_TEMP/package"
           mkdir -p "$package"
-          CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -mod=vendor -trimpath -buildvcs=false -tags "$PRODUCT_TAGS" -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$package/sing-box" ./cmd/sing-box
+          CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -mod=vendor -trimpath -buildvcs=false -tags "$PRODUCT_TAGS" -ldflags "$LDFLAGS -s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$package/sing-box" ./cmd/sing-box
           chmod +x "$package/sing-box"
           "$package/sing-box" version
           git rev-parse HEAD > "$package/SOURCE_COMMIT"
@@ -88,7 +101,7 @@ jobs:
           retention-days: 30
 
   release:
-    needs: [product, source]
+    needs: [product, source, tests, lint, integrity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
