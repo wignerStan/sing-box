@@ -1,6 +1,7 @@
 name: Test
 
 on:
+  workflow_dispatch:
   workflow_call:
   push:
     branches:
@@ -24,7 +25,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  network_repair:
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/network-repair.yml
   test:
+    if: github.event_name != 'workflow_dispatch'
     name: Test
     strategy:
       fail-fast: false

@@ -1,5 +1,6 @@
 name: Network interface recovery
 on:
+  workflow_call:
   push:
     branches: [fix/incus-mac-network-20261102]
 permissions:
@@ -63,7 +64,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/product"
           ldflags=''
           if [[ '${{ matrix.target }}' == linux-* ]]; then ldflags="$(cat release/LDFLAGS)"; fi
-          CGO_ENABLED=0 go build -mod=vendor -trimpath -buildvcs=false -tags "$PRODUCT_TAGS" -ldflags "$ldflags -s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$RUNNER_TEMP/product/sing-box" ./cmd/sing-box
+          target="${{ matrix.target }}"
+          CGO_ENABLED=0 GOOS="${target%-*}" GOARCH="${target#*-}" go build -mod=vendor -trimpath -buildvcs=false -tags "$PRODUCT_TAGS" -ldflags "$ldflags -s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$RUNNER_TEMP/product/sing-box" ./cmd/sing-box
           "$RUNNER_TEMP/product/sing-box" version
           git rev-parse HEAD > "$RUNNER_TEMP/product/SOURCE_COMMIT"
           cp deps/vendor-lock.json "$RUNNER_TEMP/product/VENDOR_LOCK.json"
