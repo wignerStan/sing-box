@@ -32,14 +32,15 @@ func ownerRecordPath() string { return filepath.Join(runtimeStateDirectory, "own
 func ownerRecordTemp() string { return filepath.Join(runtimeStateDirectory, ".owner.json.tmp") }
 
 type ownedAttachmentRecord struct {
-	Interface    string `json:"interface"`
-	InNetNS      bool   `json:"in_netns,omitempty"`
-	Parent       uint32 `json:"parent"`
-	Handle       uint32 `json:"handle"`
-	Priority     uint16 `json:"priority"`
-	Name         string `json:"name"`
-	ProgramID    int    `json:"program_id"`
-	QdiscCreated bool   `json:"qdisc_created,omitempty"`
+	Interface      string `json:"interface"`
+	InterfaceIndex int    `json:"interface_index,omitempty"`
+	InNetNS        bool   `json:"in_netns,omitempty"`
+	Parent         uint32 `json:"parent"`
+	Handle         uint32 `json:"handle"`
+	Priority       uint16 `json:"priority"`
+	Name           string `json:"name"`
+	ProgramID      int    `json:"program_id"`
+	QdiscCreated   bool   `json:"qdisc_created,omitempty"`
 }
 
 type ownershipRecord struct {

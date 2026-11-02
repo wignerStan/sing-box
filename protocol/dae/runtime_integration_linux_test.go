@@ -33,6 +33,7 @@ const (
 	integrationWANPeer      = "sbciwpeer0"
 	integrationWANNetNS     = "sb-ci-wan"
 	integrationLAN          = "sbcilan0"
+	integrationTUN          = "sbcitun0"
 	integrationLANPeer      = "sbcilpeer0"
 	integrationLANNetNS     = "sb-ci-lan"
 	providerOwnerRecord     = "/run/dae-ebpfinbound/owner.json"
@@ -96,6 +97,22 @@ func TestDAEInboundRealDatapath(t *testing.T) {
 	active = startIntegrationSingBox(t, binary, configPath)
 	testAllIntegrationTraffic(t)
 	testIntegrationDNSReplies(t)
+	// A daemon restart can remove and recreate a configured TUN interface.
+	// Recreate both roles without restarting sing-box, then verify the data path.
+	for _, interfaceName := range []string{integrationLAN, integrationWAN, integrationTUN} {
+		mustRunIntegrationIP(t, "link", "del", interfaceName)
+		time.Sleep(2500 * time.Millisecond) // include an absent-interface maintenance pass
+		if interfaceName == integrationTUN {
+			prepareIntegrationTUN(t)
+		} else if interfaceName == integrationLAN {
+			prepareIntegrationLAN(t)
+		} else {
+			prepareIntegrationWAN(t)
+		}
+		waitIntegrationCaptureHooks(t, interfaceName)
+		testAllIntegrationTraffic(t)
+		testIntegrationDNSReplies(t)
+	}
 	active.stop(t)
 	active = nil
 	assertIntegrationProviderGone(t)
@@ -116,6 +133,28 @@ func TestDAEInboundRealDatapath(t *testing.T) {
 	runIntegrationClientProcess(t, "udp6", "[2001:db8:dae::2]:19083", "after-restart", "")
 	active.stop(t)
 	active = nil
+	assertIntegrationProviderGone(t)
+
+	// A stale owner must not remove a qdisc created on a new interface that
+	// happens to reuse the configured name after the runtime crashed.
+	active = startIntegrationSingBox(t, binary, configPath)
+	active.kill()
+	active = nil
+	mustRunIntegrationIP(t, "link", "del", integrationTUN)
+	prepareIntegrationTUN(t)
+	if output, err := exec.Command("tc", "qdisc", "add", "dev", integrationTUN, "clsact").CombinedOutput(); err != nil {
+		t.Fatalf("add external qdisc: %v: %s", err, output)
+	}
+	if output, err := exec.Command(binary, "tools", "dae", "cleanup-stale").CombinedOutput(); err != nil {
+		t.Fatalf("cleanup after interface replacement: %v: %s", err, output)
+	}
+	output, err := exec.Command("tc", "qdisc", "show", "dev", integrationTUN).CombinedOutput()
+	if err != nil || !bytes.Contains(output, []byte("clsact")) {
+		t.Fatalf("stale cleanup removed the replacement interface's qdisc: %v: %s", err, output)
+	}
+	if output, err := exec.Command("tc", "qdisc", "del", "dev", integrationTUN, "clsact").CombinedOutput(); err != nil {
+		t.Fatalf("remove external test qdisc: %v: %s", err, output)
+	}
 	assertIntegrationProviderGone(t)
 }
 
@@ -193,7 +232,7 @@ func writeIntegrationConfig(t *testing.T) string {
 		"inbounds": []any{map[string]any{
 			"type":                         "dae",
 			"tag":                          "dae-in",
-			"lan_interface":                []string{integrationLAN},
+			"lan_interface":                []string{integrationLAN, integrationTUN},
 			"wan_interface":                []string{integrationWAN},
 			"tproxy_port":                  23456,
 			"output_mark":                  "0x100",
@@ -486,6 +525,20 @@ func prepareIntegrationNetwork(t *testing.T) {
 	cleanupIntegrationNetwork()
 	t.Cleanup(cleanupIntegrationNetwork)
 	mustRunIntegrationIP(t, "netns", "add", integrationWANNetNS)
+	mustRunIntegrationIP(t, "netns", "add", integrationLANNetNS)
+	prepareIntegrationWAN(t)
+	prepareIntegrationLAN(t)
+	prepareIntegrationTUN(t)
+}
+
+func prepareIntegrationTUN(t *testing.T) {
+	t.Helper()
+	mustRunIntegrationIP(t, "tuntap", "add", "dev", integrationTUN, "mode", "tun")
+	mustRunIntegrationIP(t, "link", "set", integrationTUN, "up")
+}
+
+func prepareIntegrationWAN(t *testing.T) {
+	t.Helper()
 	mustRunIntegrationIP(t, "link", "add", integrationWAN, "type", "veth", "peer", "name", integrationWANPeer)
 	mustRunIntegrationIP(t, "link", "set", integrationWANPeer, "netns", integrationWANNetNS)
 	mustRunIntegrationIP(t, "address", "add", "198.18.0.1/30", "dev", integrationWAN)
@@ -496,7 +549,10 @@ func prepareIntegrationNetwork(t *testing.T) {
 	mustRunIntegrationIP(t, "netns", "exec", integrationWANNetNS, "ip", "-6", "address", "add", "2001:db8:dae::2/64", "dev", integrationWANPeer, "nodad")
 	mustRunIntegrationIP(t, "netns", "exec", integrationWANNetNS, "ip", "link", "set", integrationWANPeer, "up")
 
-	mustRunIntegrationIP(t, "netns", "add", integrationLANNetNS)
+}
+
+func prepareIntegrationLAN(t *testing.T) {
+	t.Helper()
 	mustRunIntegrationIP(t, "link", "add", integrationLAN, "type", "veth", "peer", "name", integrationLANPeer)
 	mustRunIntegrationIP(t, "link", "set", integrationLANPeer, "netns", integrationLANNetNS)
 	mustRunIntegrationIP(t, "address", "add", "192.0.2.1/30", "dev", integrationLAN)
@@ -510,7 +566,28 @@ func prepareIntegrationNetwork(t *testing.T) {
 	mustRunIntegrationIP(t, "netns", "exec", integrationLANNetNS, "ip", "-6", "route", "add", "default", "via", "2001:db8:dae:1::1")
 }
 
+func waitIntegrationCaptureHooks(t *testing.T, interfaceName string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		ready := true
+		for _, direction := range []string{"ingress", "egress"} {
+			output, err := exec.Command("tc", "filter", "show", "dev", interfaceName, direction).CombinedOutput()
+			if err != nil || !bytes.Contains(output, []byte("dae_cap_")) || (interfaceName == integrationTUN && !bytes.Contains(output, []byte("_l3"))) {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("capture hooks did not return on %s after interface recreation", interfaceName)
+}
+
 func cleanupIntegrationNetwork() {
+	_ = runIntegrationCommand("ip", "link", "del", integrationTUN)
 	_ = runIntegrationCommand("ip", "link", "del", integrationWAN)
 	_ = runIntegrationCommand("ip", "link", "del", integrationLAN)
 	_ = runIntegrationCommand("ip", "netns", "del", integrationWANNetNS)
@@ -546,7 +623,7 @@ func assertIntegrationProviderResourcesGone(t *testing.T) {
 func assertIntegrationProviderGone(t *testing.T) {
 	t.Helper()
 	assertIntegrationProviderResourcesGone(t)
-	for _, interfaceName := range []string{integrationLAN, integrationWAN} {
+	for _, interfaceName := range []string{integrationLAN, integrationWAN, integrationTUN} {
 		output, err := exec.Command("tc", "qdisc", "show", "dev", interfaceName).CombinedOutput()
 		if err != nil {
 			t.Fatal(err)

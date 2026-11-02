@@ -50,6 +50,17 @@ func (g *operationGate) closeAndWait() {
 	g.mu.Unlock()
 }
 
+type interfaceAttachment struct {
+	index     int
+	records   []ownedTCAttachment
+	cleanup   []func() error
+	lastError string
+}
+
+func (a *interfaceAttachment) close() error {
+	return runCleanupReverse(a.cleanup)
+}
+
 type captureRuntime struct {
 	config CaptureConfig
 	log    *slog.Logger
@@ -64,6 +75,7 @@ type captureRuntime struct {
 	netns                  *captureNetNS
 	bpf                    *captureObjects
 	detachFunctions        []func() error
+	interfaceAttachments   map[string]*interfaceAttachment
 	publishedFiles         []*os.File
 
 	lifecycle   context.Context

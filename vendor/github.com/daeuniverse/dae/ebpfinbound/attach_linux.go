@@ -69,7 +69,7 @@ func (r *captureRuntime) attachDatapath() ([]ownedTCAttachment, []func() error, 
 	}
 
 	for _, interfaceName := range r.config.LANInterfaces {
-		attached, attachedCleanup, attachErr := r.attachLANInterface(interfaceName, recordAttachment)
+		attached, attachedCleanup, attachErr := r.attachManagedInterface(interfaceName, false, recordAttachment)
 		records = append(records, attached...)
 		cleanup = append(cleanup, attachedCleanup...)
 		if attachErr != nil {
@@ -77,7 +77,7 @@ func (r *captureRuntime) attachDatapath() ([]ownedTCAttachment, []func() error, 
 		}
 	}
 	for _, interfaceName := range r.config.WANInterfaces {
-		attached, attachedCleanup, attachErr := r.attachWANInterface(interfaceName, recordAttachment)
+		attached, attachedCleanup, attachErr := r.attachManagedInterface(interfaceName, true, recordAttachment)
 		records = append(records, attached...)
 		cleanup = append(cleanup, attachedCleanup...)
 		if attachErr != nil {
@@ -113,41 +113,58 @@ func (r *captureRuntime) configureKernel() error {
 			}
 		}
 	}
-	for _, interfaceName := range r.config.LANInterfaces {
-		for _, setting := range []struct{ family, key, value string }{
-			{"ipv4", "forwarding", "1"},
-			{"ipv4", "send_redirects", "0"},
-			{"ipv4", "rp_filter", "0"},
-			{"ipv6", "forwarding", "1"},
-		} {
-			path, err := interfaceSysctlPath(setting.family, interfaceName, setting.key)
-			if err != nil {
-				return err
-			}
-			if err := manager.Set(path, setting.value); err != nil {
-				if setting.family == "ipv6" && errors.Is(err, os.ErrNotExist) {
-					continue
-				}
-				return err
-			}
+	for _, name := range r.config.LANInterfaces {
+		if err := r.configureLANInterface(name); err != nil {
+			return err
 		}
 	}
-	if len(r.config.LANInterfaces) > 0 {
-		for _, interfaceName := range r.config.WANInterfaces {
-			path, err := interfaceSysctlPath("ipv6", interfaceName, "accept_ra")
-			if err != nil {
-				return err
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
+	for _, name := range r.config.WANInterfaces {
+		if err := r.configureWANInterface(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *captureRuntime) configureLANInterface(interfaceName string) error {
+	if !r.config.AutoConfigureKernel || r.netns == nil || r.netns.hostSysctls == nil {
+		return nil
+	}
+	manager := r.netns.hostSysctls
+	for _, setting := range []struct{ family, key, value string }{
+		{"ipv4", "forwarding", "1"},
+		{"ipv4", "send_redirects", "0"},
+		{"ipv4", "rp_filter", "0"},
+		{"ipv6", "forwarding", "1"},
+	} {
+		path, err := interfaceSysctlPath(setting.family, interfaceName, setting.key)
+		if err != nil {
+			return err
+		}
+		if err := manager.Set(path, setting.value); err != nil {
+			if setting.family == "ipv6" && errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			if strings.TrimSpace(string(raw)) == "1" {
-				if err := manager.Set(path, "2"); err != nil {
-					return err
-				}
-			}
+			return err
 		}
+	}
+	return nil
+}
+
+func (r *captureRuntime) configureWANInterface(interfaceName string) error {
+	if !r.config.AutoConfigureKernel || len(r.config.LANInterfaces) == 0 || r.netns == nil || r.netns.hostSysctls == nil {
+		return nil
+	}
+	path, err := interfaceSysctlPath("ipv6", interfaceName, "accept_ra")
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	if strings.TrimSpace(string(raw)) == "1" {
+		return r.netns.hostSysctls.Set(path, "2")
 	}
 	return nil
 }
@@ -157,6 +174,10 @@ func (r *captureRuntime) attachLANInterface(interfaceName string, recordAttachme
 	if err != nil {
 		return nil, nil, err
 	}
+	return r.attachLANLink(link, recordAttachment)
+}
+
+func (r *captureRuntime) attachLANLink(link netlink.Link, recordAttachment func(ownedAttachmentRecord) error) ([]ownedTCAttachment, []func() error, error) {
 	ingressProgram, egressProgram := r.bpf.TproxyLanIngressL3, r.bpf.TproxyLanEgressL3
 	ingressName, egressName := "dae_cap_li_l3", "dae_cap_le_l3"
 	if linkUsesEthernetHeader(link) {
@@ -174,6 +195,10 @@ func (r *captureRuntime) attachWANInterface(interfaceName string, recordAttachme
 	if err != nil {
 		return nil, nil, err
 	}
+	return r.attachWANLink(link, recordAttachment)
+}
+
+func (r *captureRuntime) attachWANLink(link netlink.Link, recordAttachment func(ownedAttachmentRecord) error) ([]ownedTCAttachment, []func() error, error) {
 	if link.Attrs().Index == 1 || link.Attrs().Name == "lo" {
 		return nil, nil, errors.New("cannot attach WAN capture to loopback")
 	}
@@ -322,6 +347,16 @@ func attachSingleFilter(link netlink.Link, inNetNS bool, filter *netlink.BpfFilt
 			if !qdiscCreated {
 				return nil
 			}
+			current, err := netlink.LinkByName(link.Attrs().Name)
+			if err != nil {
+				if isMissingNetlinkError(err) {
+					return nil
+				}
+				return err
+			}
+			if current.Attrs().Index != link.Attrs().Index {
+				return nil
+			}
 			empty, err := interfaceFiltersEmpty(link)
 			if err != nil {
 				return fmt.Errorf("inspect owned clsact qdisc on %s: %w", link.Attrs().Name, err)
@@ -339,7 +374,7 @@ func attachSingleFilter(link netlink.Link, inNetNS bool, filter *netlink.BpfFilt
 		}
 		return withNamedNetNS(captureNetNSName, remove)
 	}
-	record := ownedAttachmentRecord{Interface: link.Attrs().Name, InNetNS: inNetNS, Parent: filter.Attrs().Parent, Handle: filter.Attrs().Handle, Priority: filter.Attrs().Priority, Name: filter.Name, ProgramID: filter.Id, QdiscCreated: qdiscCreated}
+	record := ownedAttachmentRecord{Interface: link.Attrs().Name, InterfaceIndex: link.Attrs().Index, InNetNS: inNetNS, Parent: filter.Attrs().Parent, Handle: filter.Attrs().Handle, Priority: filter.Attrs().Priority, Name: filter.Name, ProgramID: filter.Id, QdiscCreated: qdiscCreated}
 	attachment := ownedTCAttachment{record: record}
 	cleanup := []func() error{cleanupQdisc}
 	if recordAttachment != nil {
@@ -362,7 +397,7 @@ func attachSingleFilter(link netlink.Link, inNetNS bool, filter *netlink.BpfFilt
 	if !ok || bpfActual.Name != filter.Name {
 		return attachment, cleanup, fmt.Errorf("capture TC filter identity mismatch on %s", link.Attrs().Name)
 	}
-	record = ownedAttachmentRecord{Interface: link.Attrs().Name, InNetNS: inNetNS, Parent: bpfActual.Attrs().Parent, Handle: bpfActual.Attrs().Handle, Priority: bpfActual.Attrs().Priority, Name: bpfActual.Name, ProgramID: bpfActual.Id, QdiscCreated: qdiscCreated}
+	record = ownedAttachmentRecord{Interface: link.Attrs().Name, InterfaceIndex: link.Attrs().Index, InNetNS: inNetNS, Parent: bpfActual.Attrs().Parent, Handle: bpfActual.Attrs().Handle, Priority: bpfActual.Attrs().Priority, Name: bpfActual.Name, ProgramID: bpfActual.Id, QdiscCreated: qdiscCreated}
 	attachment.record = record
 	if recordAttachment != nil {
 		if err := recordAttachment(record); err != nil {
@@ -440,6 +475,9 @@ func deleteOwnedFilter(record ownedAttachmentRecord) error {
 			}
 			return err
 		}
+		if record.InterfaceIndex != 0 && link.Attrs().Index != record.InterfaceIndex {
+			return nil
+		}
 		filter, err := findTCFilter(link, record.Parent, record.Handle)
 		if err != nil {
 			if errors.Is(err, errTCFilterNotFound) {
@@ -488,6 +526,9 @@ func deleteOwnedQdisc(record ownedAttachmentRecord) error {
 				return nil
 			}
 			return err
+		}
+		if record.InterfaceIndex != 0 && link.Attrs().Index != record.InterfaceIndex {
+			return nil
 		}
 		empty, err := interfaceFiltersEmpty(link)
 		if err != nil {

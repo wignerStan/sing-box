@@ -1,0 +1,113 @@
+name: Network interface recovery
+on:
+  push:
+    branches: [fix/incus-mac-network-20261102]
+permissions:
+  contents: read
+concurrency:
+  group: network-repair-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-amd64
+          - runner: macos-15
+            target: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      GOTOOLCHAIN: local
+      PRODUCT_TAGS: with_dae,with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_tailscale
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Set native build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ '${{ matrix.target }}' == linux-* ]]; then
+            echo "PRODUCT_TAGS=with_dae,$(cat release/DEFAULT_BUILD_TAGS_OTHERS)" >> "$GITHUB_ENV"
+          else
+            echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+            echo "MACSDK=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          fi
+      - name: Verify vendor projection
+        run: python3 tools/vendor/verify.py
+      - name: Verify patch regeneration
+        if: runner.os == 'Linux'
+        run: |
+          git submodule update --init --depth 1 third_party/dae third_party/tailscale
+          python3 tools/vendor/verify.py --require-source
+      - name: Race tests and vet
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages='./common/tls ./protocol/tailscale ./protocol/tun'
+          if [[ '${{ matrix.target }}' == linux-* ]]; then packages="$packages ./protocol/dae"; fi
+          go test -mod=vendor -race -tags "$PRODUCT_TAGS" -count=1 $packages
+          go vet -mod=vendor -tags "$PRODUCT_TAGS" $packages
+      - name: Build pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="1.14.2-wigner.1-hotplug.${GITHUB_SHA:0:8}"
+          mkdir -p "$RUNNER_TEMP/product"
+          ldflags=''
+          if [[ '${{ matrix.target }}' == linux-* ]]; then ldflags="$(cat release/LDFLAGS)"; fi
+          CGO_ENABLED=0 go build -mod=vendor -trimpath -buildvcs=false -tags "$PRODUCT_TAGS" -ldflags "$ldflags -s -w -X github.com/sagernet/sing-box/constant.Version=$version" -o "$RUNNER_TEMP/product/sing-box" ./cmd/sing-box
+          "$RUNNER_TEMP/product/sing-box" version
+          git rev-parse HEAD > "$RUNNER_TEMP/product/SOURCE_COMMIT"
+          cp deps/vendor-lock.json "$RUNNER_TEMP/product/VENDOR_LOCK.json"
+      - name: Prove regression against deployed release
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/baseline"
+          gh release download v1.14.2-wigner.1 --repo wignerStan/sing-box --pattern '*linux-amd64.tar.gz' --dir "$RUNNER_TEMP/baseline"
+          archive="$RUNNER_TEMP/baseline/sing-box-v1.14.2-wigner.1-linux-amd64.tar.gz"
+          echo "faa06bcb2bba28dc4d113c0e3eaed88ab2ba9d89324a903c9feb6d951f3bbddf  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP/baseline"
+          set +e
+          sudo env PATH="$PATH" GOTOOLCHAIN=local SING_BOX_DAE_BINARY="$RUNNER_TEMP/baseline/sing-box" go test -mod=vendor -tags "$PRODUCT_TAGS,integration" -run '^TestDAEInboundRealDatapath$' -count=1 -timeout=5m -v ./protocol/dae > "$RUNNER_TEMP/baseline-test.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/baseline-test.log"
+          test "$result" -ne 0
+          grep -F 'capture hooks did not return on sbcilan0 after interface recreation' "$RUNNER_TEMP/baseline-test.log"
+      - name: Verify interface recreation and cleanup
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env PATH="$PATH" GOTOOLCHAIN=local SING_BOX_DAE_BINARY="$RUNNER_TEMP/product/sing-box" go test -mod=vendor -tags "$PRODUCT_TAGS,integration" -run '^TestDAEInboundRealDatapath$' -count=1 -timeout=5m -v ./protocol/dae
+      - name: Package verified binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/product"
+          shasum -a 256 sing-box SOURCE_COMMIT VENDOR_LOCK.json > SHA256SUMS
+          tar -czf "$RUNNER_TEMP/sing-box-${{ matrix.target }}.tar.gz" sing-box SOURCE_COMMIT VENDOR_LOCK.json SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ runner.temp }}/sing-box-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux'
+        with:
+          name: interface-recovery-baseline-${{ github.sha }}
+          path: ${{ runner.temp }}/baseline-test.log
+          if-no-files-found: ignore

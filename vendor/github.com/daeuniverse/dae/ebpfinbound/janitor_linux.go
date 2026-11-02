@@ -23,6 +23,7 @@ func (r *captureRuntime) runJanitor() {
 		if err := r.gate.enter(); err != nil {
 			return
 		}
+		r.reconcileInterfaces()
 		r.stateMu.RLock()
 		objects := r.bpf
 		r.stateMu.RUnlock()
